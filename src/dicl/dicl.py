@@ -134,9 +134,9 @@ class DICL:
         self.rescale_factor = rescale_factor
         self.up_shift = up_shift
 
-        self.disentangler = make_pipeline(
-            MinMaxScaler(), StandardScaler(), disentangler
-        )
+        self.scaler = make_pipeline(MinMaxScaler(), StandardScaler())
+
+        self.disentangler = make_pipeline(self.scaler, disentangler)
 
         self.iclearner = MultiVariateICLTrainer(
             model=model,
@@ -349,7 +349,6 @@ class DICL:
         metrics = {}
 
         # ------- MSE --------
-
         perdim_squared_errors = (self.X[1:] - self.mean) ** 2
         agg_squared_error = np.linalg.norm(self.X[1:] - self.mean, axis=1)
 
@@ -359,6 +358,21 @@ class DICL:
             axis=0
         )
         metrics["perdim_squared_error"] = agg_squared_error
+
+        # ------- scaled MSE --------
+        scaled_groundtruth = self.scaler.transform(self.X[1:])
+        scaled_mean = self.scaler.transform(self.mean)
+        perdim_squared_errors = (scaled_groundtruth - scaled_mean) ** 2
+        agg_squared_error = np.linalg.norm(scaled_groundtruth - scaled_mean, axis=1)
+
+        metrics["scaled_average_agg_squared_error"] = agg_squared_error[burnin:].mean(
+            axis=0
+        )
+        metrics["scaled_agg_squared_error"] = agg_squared_error
+        metrics["scaled_average_perdim_squared_error"] = perdim_squared_errors[
+            burnin:
+        ].mean(axis=0)
+        metrics["scaled_perdim_squared_error"] = agg_squared_error
 
         # ------ KS -------
         kss, _ = compute_ks_metric(
