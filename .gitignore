@@ -10,6 +10,7 @@
 PKG-INFO
 
 runs/
+artifacts/
 
 .ruff_cache/
 
