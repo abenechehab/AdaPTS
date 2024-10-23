@@ -71,9 +71,13 @@ def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
             env = gym.make(env_id, render_mode="rgb_array")
+            if 'dm_control' in env_id:
+                env = gym.wrappers.FlattenObservation(env)
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             env = gym.make(env_id)
+            if 'dm_control' in env_id:
+                env = gym.wrappers.FlattenObservation(env)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
         return env
@@ -155,7 +159,8 @@ class Actor(nn.Module):
 
 def main():
     args = tyro.cli(Args)
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    run_name = f"{args.env_id.replace('/', '-')}_"
+    run_name += f"_{args.exp_name}__{args.seed}__{int(time.time())}"
     writer = SummaryWriter(f"{args.path}/runs/{run_name}")
     writer.add_text(
         "hyperparameters",
@@ -206,6 +211,13 @@ def main():
         alpha = args.alpha
 
     envs.single_observation_space.dtype = np.float32
+    if isinstance(envs.single_action_space, gym.spaces.Box):
+        envs.single_action_space = gym.spaces.Box(
+            low=envs.single_action_space.low,
+            high=envs.single_action_space.high,
+            shape=envs.single_action_space.shape,
+            dtype=np.float32,
+        )
     rb = ReplayBuffer(
         args.buffer_size,
         envs.single_observation_space,
@@ -292,6 +304,7 @@ def main():
                     qf2_next_target = qf2_target(
                         data.next_observations, next_state_actions
                     )
+
                     min_qf_next_target = (
                         torch.min(qf1_next_target, qf2_next_target)
                         - alpha * next_state_log_pi
