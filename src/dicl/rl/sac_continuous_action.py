@@ -159,8 +159,7 @@ class Actor(nn.Module):
 
 def main():
     args = tyro.cli(Args)
-    run_name = f"{args.env_id.replace('/', '-')}_"
-    run_name += f"_{args.exp_name}__{args.seed}__{int(time.time())}"
+    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     writer = SummaryWriter(f"{args.path}/runs/{run_name}")
     writer.add_text(
         "hyperparameters",
