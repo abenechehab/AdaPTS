@@ -16,6 +16,7 @@ from dicl.utils.calibration import compute_ks_metric, ks_cdf
 
 if TYPE_CHECKING:
     from transformers import AutoModel, AutoTokenizer
+    from dicl.icl.iclearner import ICLTrainer
 
 
 class IdentityTransformer(BaseEstimator, TransformerMixin):
@@ -106,10 +107,9 @@ class DICL:
     def __init__(
         self,
         disentangler: Any,
+        iclearner: "ICLTrainer",
         n_features: int,
         n_components: int,
-        model: "AutoModel",
-        tokenizer: "AutoTokenizer",
         rescale_factor: float = 7.0,
         up_shift: float = 1.5,
     ):
@@ -119,6 +119,7 @@ class DICL:
 
         Args:
             disentangler (Any): The disentangler or preprocessor pipeline.
+            iclearner (ICLTrainer): The ICLTrainer instance used for time series
             n_features (int): Number of input features.
             n_components (int): Number of independent components to be learned.
             model (AutoModel): Pretrained model used for time series prediction.
@@ -138,13 +139,7 @@ class DICL:
 
         self.disentangler = make_pipeline(self.scaler, disentangler)
 
-        self.iclearner = MultiVariateICLTrainer(
-            model=model,
-            tokenizer=tokenizer,
-            n_features=n_components,
-            rescale_factor=rescale_factor,
-            up_shift=up_shift,
-        )
+        self.iclearner = iclearner
 
     def fit_disentangler(self, X: NDArray):
         """
@@ -295,7 +290,7 @@ class DICL:
             verbose=0,
         )
 
-        self.icl_object = self.iclearner.predict_long_horizon_llm(
+        self.icl_object = self.iclearner.predict_long_horizon(
             prediction_horizon=prediction_horizon,
             stochastic=stochastic,
             if_true_mean_else_mode=if_true_mean_else_mode,

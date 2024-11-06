@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from transformers import AutoModel, AutoTokenizer
     from dicl.utils.icl import MultiResolutionPDF
 
+from moment import MOMENTPipeline
+
 
 @dataclass
 class ICLObject:
@@ -45,16 +47,12 @@ class ICLTrainer(ABC):
         """Update the context (internal state) with the given time serie."""
 
     @abstractmethod
-    def icl(self, **kwargs) -> ICLObject:
-        """Calls the LLM and update the internal state with the PDF."""
-
-    @abstractmethod
     def compute_statistics(self, **kwargs) -> ICLObject:
         """Compute useful statistics for the predicted PDFs in the internal state."""
 
     @abstractmethod
-    def predict_long_horizon_llm(self, **kwargs):
-        """Long horizon autoregressive predictions using the LLM."""
+    def predict_long_horizon(self, **kwargs):
+        """Long horizon autoregressive predictions using the model."""
 
 
 class MultiVariateICLTrainer(ICLTrainer):
@@ -284,7 +282,7 @@ class MultiVariateICLTrainer(ICLTrainer):
             self.icl_object[dim].sigma_arr = np.array(sigma_arr)
         return self.icl_object
 
-    def predict_long_horizon_llm(
+    def predict_long_horizon(
         self,
         prediction_horizon: int,
         temperature: float = 1.0,
@@ -364,4 +362,87 @@ class MultiVariateICLTrainer(ICLTrainer):
                 )
             )
 
+        return self.compute_statistics()
+
+
+class MomentICLTrainer(ICLTrainer):
+    def __init__(
+        self,
+        n_features: int,
+        forecast_horizon: int = 96,
+        rescale_factor: float = 7.0,
+        up_shift: float = 1.5,
+    ):
+        """
+        MomentICLTrainer is an implementation of ICLTrainer using the MOMENT
+        foundation model for time series forecasting.
+
+        Args:
+            n_features (int): Number of features in the time series data
+            forecast_horizon (int): Number of steps to forecast
+            rescale_factor (float): Rescaling factor for data normalization
+            up_shift (float): Shift value applied after rescaling
+        """
+
+        self.model = MOMENTPipeline.from_pretrained(
+            "AutonLab/MOMENT-1-small",
+            model_kwargs={
+                'task_name': 'forecasting',
+                'forecast_horizon': forecast_horizon
+            }
+        )
+        self.model.init()
+
+        self.n_features = n_features
+        self.forecast_horizon = forecast_horizon
+        self.up_shift = up_shift
+        self.rescale_factor = rescale_factor
+
+        self.icl_object: List[ICLObject] = [ICLObject() for _ in range(self.n_features)]
+
+    def update_context(
+        self,
+        time_series: NDArray[np.float32],
+        mean_series: Optional[NDArray[np.float32]] = None,
+        sigma_series: Optional[NDArray[np.float32]] = None,
+        context_length: Optional[int] = None,
+        update_min_max: bool = True,
+    ):
+        """Updates the context with given time series data"""
+        if context_length is not None:
+            self.context_length = context_length
+        else:
+            self.context_length = time_series.shape[0]
+
+        assert len(time_series.shape) > 1 and time_series.shape[1] == self.n_features
+
+        # Store original time series for each feature
+        for dim in range(self.n_features):
+            self.icl_object[dim].time_series = time_series[:self.context_length, dim]
+
+            if update_min_max:
+                self.icl_object[dim].rescaling_min = time_series[:self.context_length, dim].min()
+                self.icl_object[dim].rescaling_max = time_series[:self.context_length, dim].max()
+
+        return self.icl_object
+
+    def compute_statistics(self):
+        """Compute statistics on predictions"""
+        for dim in range(self.n_features):
+            # MOMENT provides point estimates, so mean=mode=prediction, sigma=0
+            preds = self.icl_object[dim].predictions
+            self.icl_object[dim].mean_arr = preds
+            self.icl_object[dim].mode_arr = preds
+            self.icl_object[dim].sigma_arr = np.zeros_like(preds)
+        return self.icl_object
+
+    def predict_long_horizon_llm(
+        self,
+        prediction_horizon: int,
+    ):
+        """Multi-step prediction using MOMENT model"""
+        for dim in range(self.n_features):
+            ts = self.icl_object[dim].time_series.reshape(-1, 1)
+            predictions = self.model.forecast(ts, horizon=prediction_horizon)
+            self.icl_object[dim].predictions = predictions.squeeze()
         return self.compute_statistics()
