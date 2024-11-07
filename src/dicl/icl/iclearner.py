@@ -391,27 +391,20 @@ class MomentICLTrainer(ICLTrainer):
         self,
         time_series: NDArray[np.float32],
         context_length: Optional[int] = None,
-        update_min_max: bool = True,
     ):
         """Updates the context with given time series data"""
         if context_length is not None:
             self.context_length = context_length
         else:
-            self.context_length = time_series.shape[0]
+            self.context_length = time_series.shape[-1]
 
-        assert len(time_series.shape) > 1 and time_series.shape[1] == self.n_features
+        assert len(time_series.shape) == 3 and time_series.shape[1] == self.n_features
 
         # Store original time series for each feature
         for dim in range(self.n_features):
-            self.icl_object[dim].time_series = time_series[: self.context_length, dim]
-
-            if update_min_max:
-                self.icl_object[dim].rescaling_min = time_series[
-                    : self.context_length, dim
-                ].min()
-                self.icl_object[dim].rescaling_max = time_series[
-                    : self.context_length, dim
-                ].max()
+            self.icl_object[dim].time_series = time_series[
+                :, dim, : self.context_length
+            ]
 
         return self.icl_object
 
@@ -428,9 +421,10 @@ class MomentICLTrainer(ICLTrainer):
     def predict_long_horizon(self, prediction_horizon: int):
         """Multi-step prediction using MOMENT model"""
         for dim in range(self.n_features):
-            ts = self.icl_object[dim].time_series.reshape((1, 1, -1))
-            # takes in tensor of shape [batchsize, n_channels, context_length]
+            ts = self.icl_object[dim].time_series
             tensor_ts = torch.from_numpy(ts).float()
+            # takes in tensor of shape [batchsize, n_channels, context_length]
+            tensor_ts = tensor_ts.unsqueeze(1)
             predictions = self.model(x_enc=tensor_ts).forecast.cpu().detach().numpy()
-            self.icl_object[dim].predictions = predictions.squeeze()
+            self.icl_object[dim].predictions = predictions
         return self.compute_statistics()
