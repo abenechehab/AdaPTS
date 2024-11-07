@@ -11,6 +11,7 @@ PKG-INFO
 
 runs/
 artifacts/
+external_data/
 
 .ruff_cache/
 
