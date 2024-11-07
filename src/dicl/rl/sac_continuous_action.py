@@ -71,12 +71,12 @@ def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
             env = gym.make(env_id, render_mode="rgb_array")
-            if 'dm_control' in env_id:
+            if "dm_control" in env_id:
                 env = gym.wrappers.FlattenObservation(env)
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             env = gym.make(env_id)
-            if 'dm_control' in env_id:
+            if "dm_control" in env_id:
                 env = gym.wrappers.FlattenObservation(env)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
