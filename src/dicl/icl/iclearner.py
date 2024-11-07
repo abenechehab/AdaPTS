@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 import numpy as np
 from numpy.typing import NDArray
+import torch
 
 from dicl.utils.icl import (
     serialize_arr,
@@ -18,8 +19,7 @@ from dicl.utils.icl import (
 if TYPE_CHECKING:
     from transformers import AutoModel, AutoTokenizer
     from dicl.utils.icl import MultiResolutionPDF
-
-from moment import MOMENTPipeline
+    from momentfm import MOMENTPipeline
 
 
 @dataclass
@@ -51,7 +51,7 @@ class ICLTrainer(ABC):
         """Compute useful statistics for the predicted PDFs in the internal state."""
 
     @abstractmethod
-    def predict_long_horizon(self, **kwargs):
+    def predict_long_horizon(self, prediction_horizon: int, **kwargs):
         """Long horizon autoregressive predictions using the model."""
 
 
@@ -367,11 +367,7 @@ class MultiVariateICLTrainer(ICLTrainer):
 
 class MomentICLTrainer(ICLTrainer):
     def __init__(
-        self,
-        n_features: int,
-        forecast_horizon: int = 96,
-        rescale_factor: float = 7.0,
-        up_shift: float = 1.5,
+        self, model: "MOMENTPipeline", n_features: int, forecast_horizon: int = 96
     ):
         """
         MomentICLTrainer is an implementation of ICLTrainer using the MOMENT
@@ -384,27 +380,16 @@ class MomentICLTrainer(ICLTrainer):
             up_shift (float): Shift value applied after rescaling
         """
 
-        self.model = MOMENTPipeline.from_pretrained(
-            "AutonLab/MOMENT-1-small",
-            model_kwargs={
-                'task_name': 'forecasting',
-                'forecast_horizon': forecast_horizon
-            }
-        )
-        self.model.init()
+        self.model = model
 
         self.n_features = n_features
         self.forecast_horizon = forecast_horizon
-        self.up_shift = up_shift
-        self.rescale_factor = rescale_factor
 
         self.icl_object: List[ICLObject] = [ICLObject() for _ in range(self.n_features)]
 
     def update_context(
         self,
         time_series: NDArray[np.float32],
-        mean_series: Optional[NDArray[np.float32]] = None,
-        sigma_series: Optional[NDArray[np.float32]] = None,
         context_length: Optional[int] = None,
         update_min_max: bool = True,
     ):
@@ -418,11 +403,15 @@ class MomentICLTrainer(ICLTrainer):
 
         # Store original time series for each feature
         for dim in range(self.n_features):
-            self.icl_object[dim].time_series = time_series[:self.context_length, dim]
+            self.icl_object[dim].time_series = time_series[: self.context_length, dim]
 
             if update_min_max:
-                self.icl_object[dim].rescaling_min = time_series[:self.context_length, dim].min()
-                self.icl_object[dim].rescaling_max = time_series[:self.context_length, dim].max()
+                self.icl_object[dim].rescaling_min = time_series[
+                    : self.context_length, dim
+                ].min()
+                self.icl_object[dim].rescaling_max = time_series[
+                    : self.context_length, dim
+                ].max()
 
         return self.icl_object
 
@@ -436,13 +425,13 @@ class MomentICLTrainer(ICLTrainer):
             self.icl_object[dim].sigma_arr = np.zeros_like(preds)
         return self.icl_object
 
-    def predict_long_horizon_llm(
-        self,
-        prediction_horizon: int,
-    ):
+    def predict_long_horizon(self, prediction_horizon: int):
         """Multi-step prediction using MOMENT model"""
         for dim in range(self.n_features):
-            ts = self.icl_object[dim].time_series.reshape(-1, 1)
-            predictions = self.model.forecast(ts, horizon=prediction_horizon)
-            self.icl_object[dim].predictions = predictions.squeeze()
+            ts = self.icl_object[dim].time_series.reshape((1, 1, -1))
+            # takes in tensor of shape [batchsize, n_channels, context_length]
+            tensor_ts = torch.from_numpy(ts).float()
+            raise ValueError("")
+            predictions = self.model(x_enc=tensor_ts)
+            self.icl_object[dim].predictions = predictions.forecast.squeeze()
         return self.compute_statistics()
