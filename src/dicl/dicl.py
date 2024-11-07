@@ -8,44 +8,11 @@ import seaborn as sns
 
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import make_pipeline
-from sklearn.base import BaseEstimator, TransformerMixin
+
+from dicl.utils.preprocessing import AxisScaler
 
 if TYPE_CHECKING:
-    from dicl.icl.iclearner import ICLTrainer
-
-
-class IdentityTransformer(BaseEstimator, TransformerMixin):
-    def __init__(self):
-        """
-        A custom scikit-learn transformer that performs no operation on the data.
-        This is useful for the vICL variant of DICL.
-
-        Methods:
-            fit(
-                input_array: NDArray, y: Optional[NDArray] = None
-            ) -> IdentityTransformer:
-                Fits the transformer (no-op in this case), returning the instance
-                itself.
-
-            transform(input_array: NDArray, y: Optional[NDArray] = None) -> NDArray:
-                Returns the input data without modification.
-
-            inverse_transform(
-                input_array: NDArray, y: Optional[NDArray] = None) -> NDArray:
-                    Returns the input data without modification.
-        """
-        pass
-
-    def fit(self, input_array: NDArray, y: Optional[NDArray] = None):
-        return self
-
-    def transform(self, input_array: NDArray, y: Optional[NDArray] = None) -> NDArray:
-        return input_array * 1
-
-    def inverse_transform(
-        self, input_array: NDArray, y: Optional[NDArray] = None
-    ) -> NDArray:
-        return input_array * 1
+    from dicl.icl.iclearner import ICLTrainer, ICLObject
 
 
 class DICL:
@@ -126,7 +93,10 @@ class DICL:
         self.n_features = n_features
         self.n_components = n_components
 
-        self.scaler = make_pipeline(MinMaxScaler(), StandardScaler())
+        self.scaler = make_pipeline(
+            AxisScaler(MinMaxScaler(), axis=1),
+            AxisScaler(StandardScaler(), axis=1),
+        )
 
         self.disentangler = make_pipeline(self.scaler, disentangler)
 
@@ -188,21 +158,20 @@ class DICL:
             X.shape[1] == self.n_features
         ), f"N features doesnt correspond to {self.n_features}"
 
-        self.context_length = X.shape[0]
+        self.context_length = X.shape[-1]
         self.X = X
         self.prediction_horizon = prediction_horizon
 
         # Step 1: Transform the time series
-        X_transformed = self.transform(X[: -1 - prediction_horizon])
+        X_transformed = self.transform(X[:, :, :-prediction_horizon])
 
         # Step 2: Perform time series forecasting
         self.iclearner.update_context(
             time_series=copy.copy(X_transformed),
-            context_length=X_transformed.shape[0],
-            update_min_max=True,
+            context_length=X_transformed.shape[-1],
         )
 
-        self.icl_object = self.iclearner.predict_long_horizon(
+        self.icl_object: List["ICLObject"] = self.iclearner.predict_long_horizon(
             prediction_horizon=prediction_horizon,
             **kwargs,
         )
@@ -214,14 +183,14 @@ class DICL:
         all_ub = []
         for dim in range(self.n_components):
             # -------------------- Useful for Plots --------------------
-            mode_arr = self.icl_object[dim].mode_arr.flatten()
-            mean_arr = self.icl_object[dim].mean_arr.flatten()
-            sigma_arr = self.icl_object[dim].sigma_arr.flatten()
+            mode_arr = self.icl_object[dim].mode_arr
+            mean_arr = self.icl_object[dim].mean_arr
+            sigma_arr = self.icl_object[dim].sigma_arr
 
-            all_mean.append(mean_arr[..., None])
-            all_mode.append(mode_arr[..., None])
-            all_lb.append(mean_arr[..., None] - sigma_arr[..., None])
-            all_ub.append(mean_arr[..., None] + sigma_arr[..., None])
+            all_mean.append(mean_arr)
+            all_mode.append(mode_arr)
+            all_lb.append(mean_arr - sigma_arr)
+            all_ub.append(mean_arr + sigma_arr)
 
         self.mean = self.inverse_transform(np.concatenate(all_mean, axis=1))
         self.mode = self.inverse_transform(np.concatenate(all_mode, axis=1))
@@ -230,7 +199,7 @@ class DICL:
 
         return self.mean, self.mode, self.lb, self.ub
 
-    def compute_metrics(self, burnin: int = 0):
+    def compute_metrics(self):
         """
         Compute the prediction metrics such as MSE and KS test.
 
@@ -244,32 +213,21 @@ class DICL:
         metrics = {}
 
         # ------- MSE --------
-        perdim_squared_errors = (self.X[-self.prediction_horizon :] - self.mean) ** 2
-        agg_squared_error = np.linalg.norm(
-            self.X[-self.prediction_horizon :] - self.mean, axis=1
+        metrics["mse"] = np.mean(
+            (self.X[:, :, -self.prediction_horizon :] - self.mean) ** 2
         )
-
-        metrics["average_agg_squared_error"] = agg_squared_error[burnin:].mean(axis=0)
-        metrics["agg_squared_error"] = agg_squared_error
-        metrics["average_perdim_squared_error"] = perdim_squared_errors[burnin:].mean(
-            axis=0
+        # ------- MAE --------
+        metrics["mae"] = np.mean(
+            np.abs(self.X[:, :, -self.prediction_horizon :] - self.mean)
         )
-        metrics["perdim_squared_error"] = agg_squared_error
 
         # ------- scaled MSE --------
-        scaled_groundtruth = self.scaler.transform(self.X[-self.prediction_horizon :])
-        scaled_mean = self.scaler.transform(self.mean)
-        perdim_squared_errors = (scaled_groundtruth - scaled_mean) ** 2
-        agg_squared_error = np.linalg.norm(scaled_groundtruth - scaled_mean, axis=1)
-
-        metrics["scaled_average_agg_squared_error"] = agg_squared_error[burnin:].mean(
-            axis=0
+        scaled_groundtruth = self.scaler.transform(
+            self.X[:, :, -self.prediction_horizon :]
         )
-        metrics["scaled_agg_squared_error"] = agg_squared_error
-        metrics["scaled_average_perdim_squared_error"] = perdim_squared_errors[
-            burnin:
-        ].mean(axis=0)
-        metrics["scaled_perdim_squared_error"] = agg_squared_error
+        scaled_mean = self.scaler.transform(self.mean)
+        metrics["scaled_mse"] = np.mean((scaled_groundtruth - scaled_mean) ** 2)
+        metrics["scaled_mae"] = np.mean(np.abs(scaled_groundtruth - scaled_mean))
 
         return metrics
 
@@ -278,6 +236,7 @@ class DICL:
         feature_names: Optional[List[str]] = None,
         xlim: Optional[List[float]] = None,
         savefigpath: Optional[str] = None,
+        sample: int = 0,
     ):
         """
         Plot multi-step predictions and ground truth.
@@ -305,7 +264,7 @@ class DICL:
             ax = axes[dim]
             ax.plot(
                 np.arange(self.context_length),
-                self.X[:, dim],
+                self.X[sample, dim, :],
                 color="blue",
                 linewidth=1,
                 label="groundtruth",
@@ -316,7 +275,7 @@ class DICL:
                     self.context_length - self.prediction_horizon - 1,
                     self.context_length - 1,
                 ),
-                self.mean[-self.prediction_horizon :, dim],
+                self.mean[sample, dim, -self.prediction_horizon :],
                 label="multi-step",
                 color=sns.color_palette("colorblind")[1],
             )
