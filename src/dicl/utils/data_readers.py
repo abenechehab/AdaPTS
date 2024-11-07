@@ -34,5 +34,7 @@ def load_rl_data(env_name: str, data_label: str) -> np.ndarray:
     # sample an episode and extract time series
     episode = np.random.choice(np.arange(len(episode_starts)))
     return X[
-        episode_starts[episode] : episode_starts[episode] + episode_starts[episode+1]-1
+        episode_starts[episode] : episode_starts[episode]
+        + episode_starts[episode + 1]
+        - 1
     ]
