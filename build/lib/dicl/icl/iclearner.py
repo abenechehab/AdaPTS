@@ -387,9 +387,9 @@ class MomentICLTrainer(ICLTrainer):
         self.model = MOMENTPipeline.from_pretrained(
             "AutonLab/MOMENT-1-small",
             model_kwargs={
-                'task_name': 'forecasting',
-                'forecast_horizon': forecast_horizon
-            }
+                "task_name": "forecasting",
+                "forecast_horizon": forecast_horizon,
+            },
         )
         self.model.init()
 
@@ -418,11 +418,15 @@ class MomentICLTrainer(ICLTrainer):
 
         # Store original time series for each feature
         for dim in range(self.n_features):
-            self.icl_object[dim].time_series = time_series[:self.context_length, dim]
+            self.icl_object[dim].time_series = time_series[: self.context_length, dim]
 
             if update_min_max:
-                self.icl_object[dim].rescaling_min = time_series[:self.context_length, dim].min()
-                self.icl_object[dim].rescaling_max = time_series[:self.context_length, dim].max()
+                self.icl_object[dim].rescaling_min = time_series[
+                    : self.context_length, dim
+                ].min()
+                self.icl_object[dim].rescaling_max = time_series[
+                    : self.context_length, dim
+                ].max()
 
         return self.icl_object
 
@@ -446,11 +450,7 @@ class MomentICLTrainer(ICLTrainer):
 
         return self.icl_object
 
-    def predict_long_horizon_llm(
-        self,
-        prediction_horizon: int,
-        **kwargs
-    ):
+    def predict_long_horizon_llm(self, prediction_horizon: int, **kwargs):
         """Multi-step prediction using MOMENT model"""
         for dim in range(self.n_features):
             ts = self.icl_object[dim].time_series.reshape(-1, 1)
