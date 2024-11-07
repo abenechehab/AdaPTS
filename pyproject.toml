@@ -32,7 +32,6 @@ classifiers = [
 [project.optional-dependencies]
 dev = ['ruff', 'pre-commit', 'black']
 rl = ['gym==0.26.2', 'gymnasium==0.28.1', 'mujoco==2.3.3', 'dm-control==1.0.11', 'shimmy[gym-v26, dm-control]', 'stable-baselines3==2.0.0', 'tyro==0.5.10', 'tensorflow==2.17.0']
-moment = ['momentfm']
 
 [tool.setuptools]
 license-files = ['LICEN[CS]E*', 'COPYING*', 'NOTICE*', 'AUTHORS*']
