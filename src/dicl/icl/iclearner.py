@@ -431,7 +431,6 @@ class MomentICLTrainer(ICLTrainer):
             ts = self.icl_object[dim].time_series.reshape((1, 1, -1))
             # takes in tensor of shape [batchsize, n_channels, context_length]
             tensor_ts = torch.from_numpy(ts).float()
-            raise ValueError("")
-            predictions = self.model(x_enc=tensor_ts)
-            self.icl_object[dim].predictions = predictions.forecast.squeeze()
+            predictions = self.model(x_enc=tensor_ts).forecast.cpu().detach().numpy()
+            self.icl_object[dim].predictions = predictions.squeeze()
         return self.compute_statistics()

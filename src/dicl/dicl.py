@@ -10,8 +10,6 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import make_pipeline
 from sklearn.base import BaseEstimator, TransformerMixin
 
-from dicl.utils.calibration import compute_ks_metric
-
 if TYPE_CHECKING:
     from dicl.icl.iclearner import ICLTrainer
 
@@ -246,8 +244,10 @@ class DICL:
         metrics = {}
 
         # ------- MSE --------
-        perdim_squared_errors = (self.X[1:] - self.mean) ** 2
-        agg_squared_error = np.linalg.norm(self.X[1:] - self.mean, axis=1)
+        perdim_squared_errors = (self.X[-self.prediction_horizon :] - self.mean) ** 2
+        agg_squared_error = np.linalg.norm(
+            self.X[-self.prediction_horizon :] - self.mean, axis=1
+        )
 
         metrics["average_agg_squared_error"] = agg_squared_error[burnin:].mean(axis=0)
         metrics["agg_squared_error"] = agg_squared_error
@@ -257,7 +257,7 @@ class DICL:
         metrics["perdim_squared_error"] = agg_squared_error
 
         # ------- scaled MSE --------
-        scaled_groundtruth = self.scaler.transform(self.X[1:])
+        scaled_groundtruth = self.scaler.transform(self.X[-self.prediction_horizon :])
         scaled_mean = self.scaler.transform(self.mean)
         perdim_squared_errors = (scaled_groundtruth - scaled_mean) ** 2
         agg_squared_error = np.linalg.norm(scaled_groundtruth - scaled_mean, axis=1)
@@ -270,19 +270,6 @@ class DICL:
             burnin:
         ].mean(axis=0)
         metrics["scaled_perdim_squared_error"] = agg_squared_error
-
-        # ------ KS -------
-        kss, _ = compute_ks_metric(
-            groundtruth=self.X[1:],
-            icl_object=self.icl_object,
-            n_components=self.n_components,
-            n_features=self.n_features,
-            inverse_transform=self.inverse_transform,
-            burnin=burnin,
-        )
-
-        metrics["perdim_ks"] = kss
-        metrics["agg_ks"] = kss.mean(axis=0)
 
         return metrics
 
@@ -317,33 +304,12 @@ class DICL:
         for dim in range(self.n_features):
             ax = axes[dim]
             ax.plot(
-                np.arange(self.context_length - 1),
-                self.X[1:, dim],
-                color="red",
-                linewidth=1.5,
+                np.arange(self.context_length),
+                self.X[:, dim],
+                color="blue",
+                linewidth=1,
                 label="groundtruth",
-                linestyle="--",
-            )
-            ax.plot(
-                np.arange(self.context_length - 1),
-                self.mode[:, dim],
-                label=r"mode",
-                color="black",
-                linestyle="--",
-                alpha=0.5,
-            )
-            ax.plot(
-                np.arange(self.context_length - self.prediction_horizon),
-                self.mean[: self.context_length - self.prediction_horizon, dim],
-                label=r"mean $\pm$ std",
-                color=sns.color_palette("colorblind")[0],
-            )
-            ax.fill_between(
-                x=np.arange(self.context_length - self.prediction_horizon),
-                y1=self.lb[: self.context_length - self.prediction_horizon, dim],
-                y2=self.ub[: self.context_length - self.prediction_horizon, dim],
-                alpha=0.3,
-                color=sns.color_palette("colorblind")[0],
+                # linestyle="--",
             )
             ax.plot(
                 np.arange(
@@ -352,16 +318,6 @@ class DICL:
                 ),
                 self.mean[-self.prediction_horizon :, dim],
                 label="multi-step",
-                color=sns.color_palette("colorblind")[1],
-            )
-            ax.fill_between(
-                np.arange(
-                    self.context_length - self.prediction_horizon - 1,
-                    self.context_length - 1,
-                ),
-                y1=self.lb[-self.prediction_horizon :, dim],
-                y2=self.ub[-self.prediction_horizon :, dim],
-                alpha=0.3,
                 color=sns.color_palette("colorblind")[1],
             )
             ax.set_ylabel(feature_names[dim], rotation=0, labelpad=20)
