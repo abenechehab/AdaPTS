@@ -16,56 +16,6 @@ if TYPE_CHECKING:
 
 
 class DICL:
-    """
-    DICL (Disentangled In-Context Learning) is a time-series forecasting model that
-    leverages a disentangler and a foundational model (LLM) for time series forecasting.
-
-    Methods:
-        fit_disentangler(X: NDArray):
-            Fit the disentangler on the input data.
-
-        transform(X: NDArray) -> NDArray:
-            Transform the input data using the disentangler.
-
-        inverse_transform(X_transformed: NDArray) -> NDArray:
-            Inverse transform the data back to the original space after disentangling.
-
-        predict_single_step(X: NDArray) -> Tuple[NDArray, ...]:
-            Perform single-step time series prediction using the model.
-
-        predict_multi_step(
-            X: NDArray,
-            prediction_horizon: int,
-            stochastic: bool = False,
-            if_true_mean_else_mode: bool = False
-        ) -> Tuple[NDArray, ...]:
-            Perform multi-step time series prediction for the given horizon.
-
-        compute_metrics(burnin: int = 0) -> dict:
-            Compute evaluation metrics (e.g., MSE, KS test) after prediction.
-
-        plot_single_step(
-            feature_names: Optional[List[str]] = None,
-            xlim: Optional[List[float]] = None,
-            savefigpath: Optional[str] = None
-        ):
-            Plot single-step predictions and ground truth time series.
-
-        plot_multi_step(
-            feature_names: Optional[List[str]] = None,
-            xlim: Optional[List[float]] = None,
-            savefigpath: Optional[str] = None
-        ):
-            Plot multi-step predictions and ground truth time series.
-
-        plot_calibration(
-            feature_names: Optional[List[str]] = None,
-            savefigpath: Optional[str] = None,
-            burnin: int = 0
-        ):
-            Plot the calibration curves based on the KS test for different features.
-    """
-
     def __init__(
         self,
         disentangler: Any,
