@@ -9,12 +9,15 @@ from tqdm import tqdm
 import numpy as np
 from numpy.typing import NDArray
 import torch
+# from torch.optim.lr_scheduler import OneCycleLR
 
 from dicl.utils.icl import (
     serialize_arr,
     SerializerSettings,
     calculate_multiPDF_llama3,
 )
+
+from momentfm.utils.utils import control_randomness
 
 if TYPE_CHECKING:
     from transformers import AutoModel, AutoTokenizer
@@ -420,6 +423,7 @@ class MomentICLTrainer(ICLTrainer):
 
     def predict_long_horizon(self, prediction_horizon: int):
         """Multi-step prediction using MOMENT model"""
+        self.model.eval()
         for dim in range(self.n_features):
             ts = self.icl_object[dim].time_series
             tensor_ts = torch.from_numpy(ts).float()
@@ -428,3 +432,83 @@ class MomentICLTrainer(ICLTrainer):
             predictions = self.model(x_enc=tensor_ts).forecast.cpu().detach().numpy()
             self.icl_object[dim].predictions = predictions
         return self.compute_statistics()
+
+    def fine_tune(
+        self,
+        X: NDArray[np.float32],  # input sequences
+        y: NDArray[np.float32],  # target sequences
+        n_epochs: int = 1,
+        batch_size: int = 8,
+        learning_rate: float = 1e-4,
+        max_grad_norm: float = 5.0,
+        verbose: int = 0,
+        seed: int = 13
+    ):
+        """Fine-tune the model on the given time series data
+
+        Args:
+            X: Input sequences of shape [n_samples, n_features, input_length]
+            y: Target sequences of shape [n_samples, n_features, forecast_horizon]
+            n_epochs: Number of epochs to train
+            batch_size: Batch size for training
+            learning_rate: Learning rate for optimizer
+            max_grad_norm: Maximum gradient norm for clipping
+            verbose: verbosity level
+        """
+
+        self.model.train()
+
+        # Set random seeds for PyTorch, Numpy etc.
+        control_randomness(seed=seed)
+
+        # Get device from model
+        device = next(self.model.parameters()).device
+
+        # Create dataset and data loader
+        tensor_X = torch.from_numpy(X).float()
+        tensor_y = torch.from_numpy(y).float()
+        dataset = torch.utils.data.TensorDataset(tensor_X, tensor_y)
+        train_loader = torch.utils.data.DataLoader(
+            dataset, batch_size=batch_size, shuffle=True
+        )
+
+        # Setup training
+        criterion = torch.nn.MSELoss().to(device)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
+        scaler = torch.cuda.amp.GradScaler()
+
+        # Create a OneCycleLR scheduler
+        # max_lr = 1e-4
+        # total_steps = len(train_loader) * n_epochs
+        # scheduler = OneCycleLR(
+        #     optimizer,
+        #     max_lr=max_lr,
+        #     total_steps=total_steps,
+        #     pct_start=0.3
+        # )
+
+        # Training loop
+        for epoch in range(n_epochs):
+            losses = []
+            for X_batch, y_batch in tqdm(train_loader, desc=f"Epoch {epoch}"):
+                X_batch = X_batch.to(device)
+                y_batch = y_batch.to(device)
+
+                with torch.cuda.amp.autocast():
+                    output = self.model(x_enc=X_batch)
+                    loss = criterion(output.forecast, y_batch)
+
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
+
+                scaler.step(optimizer)
+                optimizer.zero_grad(set_to_none=True)
+                scaler.update()
+                # scheduler.step()
+
+                losses.append(loss.item())
+
+            avg_loss = np.mean(losses)
+            if verbose:
+                print(f"Epoch {epoch}: Train loss: {avg_loss:.3f}")
