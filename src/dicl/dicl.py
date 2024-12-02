@@ -61,6 +61,43 @@ class DICL:
         """
         self.disentangler.fit(X)
 
+    def fine_tune_iclearner(
+        self,
+        X: NDArray[np.float32],  # input sequences
+        y: NDArray[np.float32],  # target sequences
+        n_epochs: int = 1,
+        batch_size: int = 8,
+        learning_rate: float = 1e-4,
+        max_grad_norm: float = 5.0,
+        verbose: int = 0,
+        seed: int = 13,
+    ):
+        """Fine-tune the model on the given time series data
+
+        Args:
+            X: Input sequences of shape [n_samples, n_features, input_length]
+            y: Target sequences of shape [n_samples, n_features, forecast_horizon]
+            n_epochs: Number of epochs to train
+            batch_size: Batch size for training
+            learning_rate: Learning rate for optimizer
+            max_grad_norm: Maximum gradient norm for clipping
+            verbose: verbosity level
+        """
+
+        X = self.transform(X)
+        y = self.transform(y)
+
+        self.iclearner.fine_tune(
+            X=X,
+            y=y,
+            n_epochs=n_epochs,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            max_grad_norm=max_grad_norm,
+            verbose=verbose,
+            seed=seed
+        )
+
     def transform(self, X: NDArray) -> NDArray:
         """
         Transform the input data using the disentangler.
