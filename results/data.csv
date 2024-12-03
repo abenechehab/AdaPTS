@@ -1,0 +1,9 @@
+dataset,foundational_model,adapter,n_features,n_components,is_fine_tuned,context_length,forecast_horizon,running_time,metric,value
+ETTh1_pred=96,AutonLab/MOMENT-1-small,,7,7,False,512,96,123.9991397857666,mse,0.7258279073957865
+ETTh1_pred=96,AutonLab/MOMENT-1-small,,7,7,False,512,96,123.9991397857666,mae,0.5761164609781437
+ETTh1_pred=96,AutonLab/MOMENT-1-small,,7,7,False,512,96,123.9991397857666,scaled_mse,0.7222290716935013
+ETTh1_pred=96,AutonLab/MOMENT-1-small,,7,7,False,512,96,123.9991397857666,scaled_mae,0.5764871625084651
+ETTh1_pred=96,AutonLab/MOMENT-1-small,,7,7,True,512,96,363.35174560546875,mse,0.439065270924171
+ETTh1_pred=96,AutonLab/MOMENT-1-small,,7,7,True,512,96,363.35174560546875,mae,0.4425775266544916
+ETTh1_pred=96,AutonLab/MOMENT-1-small,,7,7,True,512,96,363.35174560546875,scaled_mse,0.4366752204914572
+ETTh1_pred=96,AutonLab/MOMENT-1-small,,7,7,True,512,96,363.35174560546875,scaled_mae,0.44300793693208645
