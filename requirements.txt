@@ -12,3 +12,4 @@ multiprocess
 scipy
 scikit-learn
 ipykernel
+tyro
