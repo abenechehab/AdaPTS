@@ -95,7 +95,7 @@ class DICL:
             learning_rate=learning_rate,
             max_grad_norm=max_grad_norm,
             verbose=verbose,
-            seed=seed
+            seed=seed,
         )
 
     def transform(self, X: NDArray) -> NDArray:

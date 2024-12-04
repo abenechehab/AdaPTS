@@ -424,9 +424,11 @@ class MomentICLTrainer(ICLTrainer):
     def predict_long_horizon(self, prediction_horizon: int):
         """Multi-step prediction using MOMENT model"""
         self.model.eval()
+        # Get device from model
+        device = next(self.model.parameters()).device
         for dim in range(self.n_features):
             ts = self.icl_object[dim].time_series
-            tensor_ts = torch.from_numpy(ts).float()
+            tensor_ts = torch.from_numpy(ts).float().to(device)
             # takes in tensor of shape [batchsize, n_channels, context_length]
             tensor_ts = tensor_ts.unsqueeze(1)
             predictions = self.model(x_enc=tensor_ts).forecast.cpu().detach().numpy()
@@ -442,7 +444,7 @@ class MomentICLTrainer(ICLTrainer):
         learning_rate: float = 1e-4,
         max_grad_norm: float = 5.0,
         verbose: int = 0,
-        seed: int = 13
+        seed: int = 13,
     ):
         """Fine-tune the model on the given time series data
 
