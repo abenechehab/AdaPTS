@@ -21,11 +21,12 @@ class Args:
     forecast_horizon: int = 96
     model_name: str = "AutonLab/MOMENT-1-large"
     context_length: int = 512
-    dataset_name: str = None  # Will be set based on forecast_horizon
-    base_projector: Optional[str] = None  # "pca"
+    dataset_name: str = "ETTh1"  # Will be set based on forecast_horizon
+    adapter: Optional[str] = None  # "pca"
     data_path: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/results/data.csv")
     seed: int = 13
     device: str = "cpu"
+
 
 def load_moment_model(model_name: str, forecast_horizon: int) -> MOMENTPipeline:
     model = MOMENTPipeline.from_pretrained(
@@ -43,6 +44,7 @@ def load_moment_model(model_name: str, forecast_horizon: int) -> MOMENTPipeline:
     )
     model.init()
     return model
+
 
 def prepare_data(dataset_name: str, context_length: int):
     datareader = data_readers.DataReader(
@@ -68,11 +70,12 @@ def prepare_data(dataset_name: str, context_length: int):
 
     return time_series, X_train, y_train, X_test, y_test, n_features
 
+
 def save_metrics_to_csv(
     metrics,
     dataset_name,
     model_name,
-    base_projector,
+    adapter,
     n_features,
     n_components,
     context_length,
@@ -100,14 +103,14 @@ def save_metrics_to_csv(
     data_row = [
         dataset_name,
         model_name,
-        base_projector,
+        adapter,
         n_features,
         n_components,
         is_fine_tuned,
         context_length,
         forecast_horizon,
         elapsed_time,
-        seed
+        seed,
     ]
 
     file_exists = data_path.exists()
@@ -120,16 +123,16 @@ def save_metrics_to_csv(
             row = data_row + [metric, value]
             writer.writerow(row)
 
+
 def main(args: Args):
     # Set dataset name based on forecast horizon if not provided
-    if args.dataset_name is None:
-        args.dataset_name = f"ETTh1_pred={args.forecast_horizon}"
+    dataset_name = f"{args.dataset_name}_pred={args.forecast_horizon}"
 
     time_series, X_train, y_train, _, _, n_features = prepare_data(
-        args.dataset_name, args.context_length
+        dataset_name, args.context_length
     )
 
-    start = n_features if not args.base_projector else 1
+    start = n_features if not args.adapter else 1
     end = n_features + 1
 
     for n_components in range(start, end):
@@ -141,7 +144,7 @@ def main(args: Args):
             num_channels=n_features,
             new_num_channels=n_components,
             patch_window_size=None,
-            base_projector=args.base_projector,
+            base_projector=args.adapter,
         )
 
         iclearner = icl.MomentICLTrainer(
@@ -169,7 +172,7 @@ def main(args: Args):
                 seed=args.seed,
             )
 
-        mean, mode, lb, ub = DICL.predict_multi_step(
+        _, _, _, _ = DICL.predict_multi_step(
             X=time_series,
             prediction_horizon=args.forecast_horizon,
         )
@@ -180,7 +183,7 @@ def main(args: Args):
             metrics,
             args.dataset_name,
             args.model_name,
-            args.base_projector,
+            args.adapter,
             n_features,
             n_components,
             args.context_length,
@@ -192,6 +195,7 @@ def main(args: Args):
         )
 
         del DICL, disentangler, iclearner, model
+
 
 if __name__ == "__main__":
     args = tyro.cli(Args)
