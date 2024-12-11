@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 # Read the data
 df = pd.read_csv("results/data.csv")
 
+
 @dataclass
 class Args:
     model: str = "AutonLab/MOMENT-1-large"
@@ -14,6 +15,7 @@ class Args:
     dataset: str = "ETTh1"
     adapter: str = "pca"
     forecasting_horizon: int = 96
+
 
 # Parse command line arguments
 args = tyro.cli(Args)
@@ -77,26 +79,22 @@ plt.axhline(
     y=no_adapter_ft, color="darkblue", linestyle="--", label="No adapter + Fine-tuning"
 )
 # Add confidence intervals for PCA curves
-if len(pca_base.groupby('seed')) > 1:
-    mean_base = pca_base.groupby('n_components')['value'].mean()
-    std_base = pca_base.groupby('n_components')['value'].std()
+if len(pca_base.groupby("seed")) > 1:
+    mean_base = pca_base.groupby("n_components")["value"].mean()
+    std_base = pca_base.groupby("n_components")["value"].std()
     plt.fill_between(
         mean_base.index,
         mean_base - std_base,
         mean_base + std_base,
         alpha=0.2,
-        color='lightblue'
+        color="lightblue",
     )
 
-if len(pca_ft.groupby('seed')) > 1:
-    mean_ft = pca_ft.groupby('n_components')['value'].mean()
-    std_ft = pca_ft.groupby('n_components')['value'].std()
+if len(pca_ft.groupby("seed")) > 1:
+    mean_ft = pca_ft.groupby("n_components")["value"].mean()
+    std_ft = pca_ft.groupby("n_components")["value"].std()
     plt.fill_between(
-        mean_ft.index,
-        mean_ft - std_ft,
-        mean_ft + std_ft,
-        alpha=0.2,
-        color='darkblue'
+        mean_ft.index, mean_ft - std_ft, mean_ft + std_ft, alpha=0.2, color="darkblue"
     )
 
 plt.xlabel("Number of Components")
