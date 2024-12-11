@@ -514,3 +514,213 @@ class MomentICLTrainer(ICLTrainer):
             avg_loss = np.mean(losses)
             if verbose:
                 print(f"Epoch {epoch}: Train loss: {avg_loss:.3f}")
+
+
+class MoiraiICLTrainer(ICLTrainer):
+    def __init__(
+        self, model: "MOMENTPipeline", n_features: int, forecast_horizon: int = 96
+    ):
+        # TODO: change type of model when Moirai is installed
+        """
+        MoiraiICLTrainer is an implementation of ICLTrainer using the Moirai
+        foundation model for time series forecasting.
+
+        Args:
+            n_features (int): Number of features in the time series data
+            forecast_horizon (int): Number of steps to forecast
+            rescale_factor (float): Rescaling factor for data normalization
+            up_shift (float): Shift value applied after rescaling
+        """
+
+        self.model = model
+
+        self.n_features = n_features
+        self.forecast_horizon = forecast_horizon
+
+        self.icl_object: List[ICLObject] = [ICLObject() for _ in range(self.n_features)]
+
+        self.context_length = None
+        self.batch_size = None
+
+    def update_context(
+        self,
+        time_series: NDArray[np.float32],
+        context_length: Optional[int] = None,
+    ):
+        """Updates the context with given time series data"""
+        if context_length is not None:
+            self.context_length = context_length
+        else:
+            self.context_length = time_series.shape[-1]
+
+        assert len(time_series.shape) == 3 and time_series.shape[1] == self.n_features
+
+        self.batch_size = time_series.shape[0]
+
+        # Store original time series for each feature
+        for dim in range(self.n_features):
+            self.icl_object[dim].time_series = time_series[
+                :, dim, : self.context_length
+            ]
+
+        return self.icl_object
+
+    def compute_statistics(self):
+        """Compute statistics on predictions"""
+        return self.icl_object
+
+    def predict_long_horizon(
+        self,
+        prediction_horizon: int,
+        batch_size: int = 512,
+    ):
+        """Multi-step prediction using Moirai model"""
+        self.model.eval()
+        # Get device from model
+        device = next(self.model.parameters()).device
+        for dim in range(self.n_features):
+            ts = self.icl_object[dim].time_series
+            tensor_ts = torch.from_numpy(ts).float().to(device)
+            # Time series values. Shape: (batch, time, variate)
+            tensor_ts = tensor_ts.reshape((self.batch_size, self.context_length, 1))
+            # Process in batches to avoid memory issues
+            all_predictions = []
+            for i in range(0, self.batch_size, batch_size):
+                batch_end = min(i + batch_size, self.batch_size)
+                batch_ts = tensor_ts[i:batch_end]
+
+                batch_predictions = (
+                    self.model(
+                        past_target=batch_ts,
+                        past_observed_target=torch.ones_like(
+                            batch_ts, dtype=torch.bool
+                        ),
+                        past_is_pad=torch.zeros_like(
+                            batch_ts, dtype=torch.bool
+                        ).squeeze(-1),
+                    )
+                    .cpu()
+                    .detach()
+                    .numpy()
+                )
+                all_predictions.append(batch_predictions)
+
+            # Stack all batches together
+            predictions = np.concatenate(all_predictions, axis=0)
+
+            # expand_dims to make it (batch, variate=1, time)
+            self.icl_object[dim].predictions = np.expand_dims(
+                np.round(np.median(predictions, axis=1), decimals=4), axis=1
+            )
+            self.icl_object[dim].mean_arr = np.expand_dims(
+                np.round(np.mean(predictions, axis=1), decimals=4), axis=1
+            )
+            self.icl_object[dim].mode_arr = copy.copy(self.icl_object[dim].mean_arr)
+            self.icl_object[dim].sigma_arr = np.expand_dims(
+                np.round(np.std(predictions, axis=1), decimals=4), axis=1
+            )
+
+        return self.compute_statistics()
+
+
+# class TTMICLTrainer(ICLTrainer):
+#     def __init__(
+#         self, model: "MOMENTPipeline", n_features: int, forecast_horizon: int = 96
+#     ):
+#         # TODO: change type of model when Moirai is installed
+#         """
+#         MoiraiICLTrainer is an implementation of ICLTrainer using the Moirai
+#         foundation model for time series forecasting.
+
+#         Args:
+#             n_features (int): Number of features in the time series data
+#             forecast_horizon (int): Number of steps to forecast
+#             rescale_factor (float): Rescaling factor for data normalization
+#             up_shift (float): Shift value applied after rescaling
+#         """
+
+#         self.model = model
+
+#         self.n_features = n_features
+#         self.forecast_horizon = forecast_horizon
+
+#         self.icl_object: List[ICLObject] = [
+# ICLObject() for _ in range(self.n_features)
+# ]
+
+#         self.context_length = None
+#         self.batch_size = None
+
+#     def update_context(
+#         self,
+#         time_series: NDArray[np.float32],
+#         context_length: Optional[int] = None,
+#     ):
+#         """Updates the context with given time series data"""
+#         if context_length is not None:
+#             self.context_length = context_length
+#         else:
+#             self.context_length = time_series.shape[-1]
+
+#         assert len(time_series.shape) == 3 and time_series.shape[1] == self.n_features
+
+#         self.batch_size = time_series.shape[0]
+
+#         # Store original time series for each feature
+#         for dim in range(self.n_features):
+#             self.icl_object[dim].time_series = time_series[
+#                 :, dim, : self.context_length
+#             ]
+
+#         return self.icl_object
+
+#     def predict_long_horizon(
+#         self,
+#     ):
+#         """Multi-step prediction using Moirai model"""
+#         self.model.eval()
+#         # Get device from model
+#         device = next(self.model.parameters()).device
+#         for dim in range(self.n_features):
+#             ts = self.icl_object[dim].time_series
+#             tensor_ts = torch.from_numpy(ts).float().to(device)
+#             # Time series values. Shape: (batch, time, variate)
+#             tensor_ts = tensor_ts.reshape((self.batch_size, self.context_length, 1))
+
+#             temp_dir = tempfile.mkdtemp()
+#             # zeroshot_trainer
+#             zeroshot_trainer = Trainer(
+#                 model=zeroshot_model,
+#                 args=TrainingArguments(
+#                     output_dir=temp_dir,
+#                     per_device_eval_batch_size=batch_size,
+#                     seed=SEED,
+#                     report_to="none",
+#                 ),
+#             )
+#             # evaluate = zero-shot performance
+#             print("+" * 20, "Test MSE zero-shot", "+" * 20)
+#             zeroshot_output = zeroshot_trainer.evaluate(dset_test)
+#             print(zeroshot_output)
+
+#             # get predictions
+
+#             predictions_dict = zeroshot_trainer.predict(dset_test)
+
+#             predictions_np = predictions_dict.predictions[0]
+
+#             print(predictions_np.shape)
+
+#             self.icl_object[dim].predictions = (
+#                 np.round(np.median(predictions[0], axis=0), decimals=4),
+#             )
+#             self.icl_object[dim].mean_arr = (
+#                 np.round(np.mean(predictions[0], axis=0), decimals=4),
+#             )
+#             self.icl_object[dim].mode_arr = (
+#                 np.round(np.mean(predictions[0], axis=0), decimals=4),
+#             )
+#             self.icl_object[dim].sigma_arr = (
+#                 np.round(np.std(predictions[0], axis=0), decimals=4),
+#             )
+#         return self.icl_object
