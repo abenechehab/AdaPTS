@@ -6,11 +6,19 @@ from dataclasses import dataclass
 from typing import Optional
 import tyro
 import numpy as np
+import torch
+
+# DICL
 from dicl import dicl, adapters
 from dicl.icl import iclearner as icl
 from dicl.utils import data_readers
+
+# Moment
 from momentfm import MOMENTPipeline
-import torch
+
+# Moirai
+from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
+
 
 os.environ["HF_HOME"] = "/mnt/vdb/hugguingface/"
 
@@ -19,7 +27,7 @@ os.environ["HF_HOME"] = "/mnt/vdb/hugguingface/"
 class Args:
     is_fine_tuned: bool = False
     forecast_horizon: int = 96
-    model_name: str = "AutonLab/MOMENT-1-large"
+    model_name: str = "AutonLab/MOMENT-1-large"  # f"Salesforce/moirai-1.1-R-large"
     context_length: int = 512
     dataset_name: str = "ETTh1"  # Will be set based on forecast_horizon
     adapter: Optional[str] = None  # "pca"
@@ -43,6 +51,26 @@ def load_moment_model(model_name: str, forecast_horizon: int) -> MOMENTPipeline:
         local_files_only=True,
     )
     model.init()
+    return model
+
+
+def load_moirai_model(
+    model_name: str,
+    forecast_horizon: int,
+    context_length: int,
+) -> MoiraiForecast:
+    model = MoiraiForecast(
+        module=MoiraiModule.from_pretrained(
+            model_name,
+        ),
+        prediction_length=forecast_horizon,
+        context_length=context_length,
+        patch_size=32,
+        num_samples=100,
+        target_dim=1,
+        feat_dynamic_real_dim=0,
+        past_feat_dynamic_real_dim=0,
+    )
     return model
 
 
@@ -137,8 +165,6 @@ def main(args: Args):
 
     for n_components in range(start, end):
         start_time = time.time()
-        model = load_moment_model(args.model_name, args.forecast_horizon)
-        model = model.to(torch.device(args.device))  # Move the model to the GPU
 
         disentangler = adapters.MultichannelProjector(
             num_channels=n_features,
@@ -147,9 +173,28 @@ def main(args: Args):
             base_projector=args.adapter,
         )
 
-        iclearner = icl.MomentICLTrainer(
-            model=model, n_features=n_components, forecast_horizon=args.forecast_horizon
-        )
+        if "MOMENT" in args.model_name:
+            model = load_moment_model(args.model_name, args.forecast_horizon).to(
+                torch.device(args.device)
+            )
+            iclearner = icl.MomentICLTrainer(
+                model=model,
+                n_features=n_components,
+                forecast_horizon=args.forecast_horizon,
+            )
+        elif "moirai" in args.model_name:
+            model = load_moirai_model(
+                args.model_name, args.forecast_horizon, args.context_length
+            ).to(torch.device(args.device))
+            iclearner = icl.MoiraiICLTrainer(
+                model=model,
+                n_features=n_components,
+                forecast_horizon=args.forecast_horizon,
+            )
+        elif "ttm" in args.model_name:
+            raise NotImplementedError("TTM backbone not implemented yet")
+        else:
+            raise ValueError(f"Not supported model: {args.model_name}")
 
         DICL = dicl.DICL(
             disentangler=disentangler,
