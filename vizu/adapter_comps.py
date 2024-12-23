@@ -21,27 +21,29 @@ class Args:
 args = tyro.cli(Args)
 
 # Get baseline values (no adapter)
-no_adapter_base = df[
+filtered_df = df[
     (df["adapter"].isna())
     & (df["foundational_model"] == args.model)
     & (~df["is_fine_tuned"])
     & (df["metric"] == args.metric)
     & (df["dataset"] == args.dataset)
     & (df["forecasting_horizon"] == args.forecasting_horizon)
-]["value"].iloc[0]
+]["value"]
+no_adapter_base = filtered_df.iloc[0] if not filtered_df.empty else float("nan")
 
-no_adapter_ft = df[
+filtered_df = df[
     (df["adapter"].isna())
     & (df["foundational_model"] == args.model)
     & (df["is_fine_tuned"])
     & (df["metric"] == args.metric)
     & (df["dataset"] == args.dataset)
     & (df["forecasting_horizon"] == args.forecasting_horizon)
-]["value"].iloc[0]
+]["value"]
+no_adapter_ft = filtered_df.iloc[0] if not filtered_df.empty else float("nan")
 
 # Get PCA data
 pca_base = df[
-    (df["adapter"] == "pca")
+    (df["adapter"] == args.adapter)
     & (df["foundational_model"] == args.model)
     & (~df["is_fine_tuned"])
     & (df["metric"] == args.metric)
@@ -50,7 +52,7 @@ pca_base = df[
 ].sort_values("n_components")
 
 pca_ft = df[
-    (df["adapter"] == "pca")
+    (df["adapter"] == args.adapter)
     & (df["foundational_model"] == args.model)
     & (df["is_fine_tuned"])
     & (df["metric"] == args.metric)
@@ -63,14 +65,18 @@ plt.figure(figsize=(10, 6))
 
 # Plot PCA curves
 plt.plot(
-    pca_base["n_components"], pca_base["value"], "o-", color="lightblue", label="PCA"
+    pca_base["n_components"],
+    pca_base["value"],
+    "o-",
+    color="lightblue",
+    label=args.adapter,
 )
 plt.plot(
     pca_ft["n_components"],
     pca_ft["value"],
     "o-",
     color="darkblue",
-    label="PCA + Fine-tuning",
+    label=f"{args.adapter} + Fine-tuning",
 )
 
 # Plot baseline horizontal lines
@@ -100,7 +106,7 @@ if len(pca_ft.groupby("seed")) > 1:
 plt.xlabel("Number of Components")
 plt.ylabel(f"{args.metric.upper()}")
 plt.title(
-    "PCA Adapter Performance on "
+    f"{args.adapter} Adapter Performance on "
     f"{args.dataset}_pred={args.forecasting_horizon} ({args.model.split('/')[-1]})"
 )
 plt.legend()
