@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from transformers import AutoModel, AutoTokenizer
     from dicl.utils.icl import MultiResolutionPDF
     from momentfm import MOMENTPipeline
+    from uni2ts.model.moirai import MoiraiForecast
 
 
 @dataclass
@@ -421,18 +422,68 @@ class MomentICLTrainer(ICLTrainer):
             self.icl_object[dim].sigma_arr = np.zeros_like(preds)
         return self.icl_object
 
-    def predict_long_horizon(self, prediction_horizon: int):
+    def predict_long_horizon(
+        self,
+        prediction_horizon: int,
+        batch_size: int = 512,
+        native_multivariate: bool = False,
+        verbose: int = 1,
+    ):
         """Multi-step prediction using MOMENT model"""
         self.model.eval()
         # Get device from model
         device = next(self.model.parameters()).device
-        for dim in range(self.n_features):
-            ts = self.icl_object[dim].time_series
-            tensor_ts = torch.from_numpy(ts).float().to(device)
-            # takes in tensor of shape [batchsize, n_channels, context_length]
-            tensor_ts = tensor_ts.unsqueeze(1)
-            predictions = self.model(x_enc=tensor_ts).forecast.cpu().detach().numpy()
-            self.icl_object[dim].predictions = predictions
+        if native_multivariate:
+            # Process all features together
+            tensor_ts = torch.cat(
+                [
+                    torch.from_numpy(self.icl_object[dim].time_series)
+                    .unsqueeze(1)
+                    .float()
+                    .to(device)
+                    for dim in range(self.n_features)
+                ],
+                axis=1,
+            )
+            # Process in batches to avoid memory issues
+            all_predictions = []
+            for i in tqdm(range(0, tensor_ts.shape[0], batch_size), desc="batch"):
+                batch_end = min(i + batch_size, tensor_ts.shape[0])
+                batch_ts = tensor_ts[i:batch_end]
+                batch_predictions = (
+                    self.model(x_enc=batch_ts).forecast.cpu().detach().numpy()
+                )
+                all_predictions.append(batch_predictions)
+
+            # Stack all batches together
+            predictions = np.concatenate(all_predictions, axis=0)
+
+            for dim in range(self.n_features):
+                self.icl_object[dim].predictions = np.expand_dims(
+                    predictions[:, dim, :], axis=1
+                )
+        else:
+            for dim in tqdm(range(self.n_features), desc="feature"):
+                ts = self.icl_object[dim].time_series
+                tensor_ts = torch.from_numpy(ts).float().to(device)
+                # takes in tensor of shape [batchsize, n_channels, context_length]
+                tensor_ts = tensor_ts.unsqueeze(1)
+                # Process in batches to avoid memory issues
+                all_predictions = []
+                for i in tqdm(
+                    range(0, ts.shape[0], batch_size),
+                    desc=f"batch on feature {dim}:",
+                    disable=not bool(verbose),
+                ):
+                    batch_end = min(i + batch_size, ts.shape[0])
+                    batch_ts = tensor_ts[i:batch_end]
+                    batch_predictions = (
+                        self.model(x_enc=batch_ts).forecast.cpu().detach().numpy()
+                    )
+                    all_predictions.append(batch_predictions)
+                # Stack all batches together
+                predictions = np.concatenate(all_predictions, axis=0)
+                self.icl_object[dim].predictions = predictions
         return self.compute_statistics()
 
     def fine_tune(
@@ -518,9 +569,8 @@ class MomentICLTrainer(ICLTrainer):
 
 class MoiraiICLTrainer(ICLTrainer):
     def __init__(
-        self, model: "MOMENTPipeline", n_features: int, forecast_horizon: int = 96
+        self, model: "MoiraiForecast", n_features: int, forecast_horizon: int = 96
     ):
-        # TODO: change type of model when Moirai is installed
         """
         MoiraiICLTrainer is an implementation of ICLTrainer using the Moirai
         foundation model for time series forecasting.
@@ -572,7 +622,7 @@ class MoiraiICLTrainer(ICLTrainer):
     def predict_long_horizon(
         self,
         prediction_horizon: int,
-        batch_size: int = 512,
+        batch_size: int = 1024,
     ):
         """Multi-step prediction using Moirai model"""
         self.model.eval()
@@ -585,7 +635,7 @@ class MoiraiICLTrainer(ICLTrainer):
             tensor_ts = tensor_ts.reshape((self.batch_size, self.context_length, 1))
             # Process in batches to avoid memory issues
             all_predictions = []
-            for i in range(0, self.batch_size, batch_size):
+            for i in tqdm(range(0, self.batch_size, batch_size), desc="batch"):
                 batch_end = min(i + batch_size, self.batch_size)
                 batch_ts = tensor_ts[i:batch_end]
 
@@ -610,7 +660,7 @@ class MoiraiICLTrainer(ICLTrainer):
 
             # expand_dims to make it (batch, variate=1, time)
             self.icl_object[dim].predictions = np.expand_dims(
-                np.round(np.median(predictions, axis=1), decimals=4), axis=1
+                np.round(np.mean(predictions, axis=1), decimals=4), axis=1
             )
             self.icl_object[dim].mean_arr = np.expand_dims(
                 np.round(np.mean(predictions, axis=1), decimals=4), axis=1
@@ -629,7 +679,7 @@ class MoiraiICLTrainer(ICLTrainer):
 #     ):
 #         # TODO: change type of model when Moirai is installed
 #         """
-#         MoiraiICLTrainer is an implementation of ICLTrainer using the Moirai
+#         TTMICLTrainer is an implementation of ICLTrainer using the TTM
 #         foundation model for time series forecasting.
 
 #         Args:
@@ -644,9 +694,8 @@ class MoiraiICLTrainer(ICLTrainer):
 #         self.n_features = n_features
 #         self.forecast_horizon = forecast_horizon
 
-#         self.icl_object: List[ICLObject] = [
-# ICLObject() for _ in range(self.n_features)
-# ]
+#         self.icl_object: List[ICLObject] =
+# [ICLObject() for _ in range(self.n_features)]
 
 #         self.context_length = None
 #         self.batch_size = None
