@@ -1,10 +1,12 @@
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 import copy
 
 import numpy as np
 from numpy.typing import NDArray
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+import torch
 
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import make_pipeline
@@ -13,12 +15,13 @@ from dicl.utils.preprocessing import AxisScaler
 
 if TYPE_CHECKING:
     from dicl.icl.iclearner import ICLTrainer, ICLObject
+    from dicl.adapters import MultichannelProjector
 
 
 class DICL:
     def __init__(
         self,
-        disentangler: Any,
+        disentangler: "MultichannelProjector",
         iclearner: "ICLTrainer",
         n_features: int,
         n_components: int,
@@ -48,7 +51,8 @@ class DICL:
             AxisScaler(StandardScaler(), axis=1),
         )
 
-        self.disentangler = make_pipeline(self.scaler, disentangler)
+        # self.disentangler = make_pipeline(self.scaler, disentangler)
+        self.disentangler = disentangler
 
         self.iclearner = iclearner
 
@@ -59,7 +63,8 @@ class DICL:
         Args:
             X (NDArray): Input time series data.
         """
-        self.disentangler.fit(X)
+        self.scaler.fit(X)
+        self.disentangler.fit(self.scaler.transform(X))
 
     def fine_tune_iclearner(
         self,
@@ -108,7 +113,7 @@ class DICL:
         Returns:
             NDArray: Transformed data.
         """
-        return self.disentangler.transform(X)
+        return self.disentangler.transform(self.scaler.transform(X))
 
     def inverse_transform(self, X_transformed: NDArray) -> NDArray:
         """
@@ -120,7 +125,9 @@ class DICL:
         Returns:
             NDArray: Data transformed back to the original space.
         """
-        return self.disentangler.inverse_transform(X_transformed)
+        return self.scaler.inverse_transform(
+            self.disentangler.inverse_transform(X_transformed)
+        )
 
     def predict_multi_step(
         self, X: NDArray, prediction_horizon: int, **kwargs
@@ -276,3 +283,55 @@ class DICL:
         if savefigpath:
             plt.savefig(savefigpath, bbox_inches="tight")
         plt.show()
+
+    def adapter_supervised_fine_tuning(self, X, y, n_epochs=10, learning_rate=0.001):
+        assert isinstance(
+            self.disentangler.base_projector_, torch.nn.Module
+        ), "Disentangler must be a PyTorch Module"
+
+        self.disentangler.base_projector_.train()
+
+        optimizer = torch.optim.Adam(
+            self.disentangler.base_projector_.parameters(), lr=learning_rate
+        )
+
+        for epoch in range(n_epochs):
+            optimizer.zero_grad()
+
+            # Transform input
+            X_transformed = self.transform(X)
+
+            # Get predictions from ICLearner
+            self.iclearner.update_context(
+                time_series=copy.copy(X_transformed),
+                context_length=X_transformed.shape[-1],
+            )
+
+            icl_predictions = self.iclearner.predict_long_horizon(
+                prediction_horizon=y.shape[-1]
+            )
+
+            # Collect means from predictions
+            all_means = []
+            for dim in range(self.n_components):
+                all_means.append(icl_predictions[dim].mean_arr)
+
+            # Inverse transform predictions
+            predictions = self.inverse_transform(np.concatenate(all_means, axis=1))
+
+            # Compute MSE loss
+            criterion = torch.nn.MSELoss()
+            loss = criterion(
+                torch.tensor(predictions, dtype=torch.float32),
+                torch.tensor(y, dtype=torch.float32),
+            )
+
+            # Backprop
+            loss.backward()
+            optimizer.step()
+
+            if epoch % 10 == 0:
+                print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
+
+        self.disentangler.base_projector_.eval()
+        return
