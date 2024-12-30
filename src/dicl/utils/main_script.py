@@ -2,6 +2,10 @@ import os
 import csv
 import logging
 from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 # dicl
 from dicl.utils import data_readers
@@ -11,6 +15,9 @@ from momentfm import MOMENTPipeline
 
 # Moirai
 from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
+
+
+RL_DATASETS = ["HalfCheetah_expert"]
 
 
 def load_moment_model(model_name: str, forecast_horizon: int) -> MOMENTPipeline:
@@ -66,6 +73,115 @@ def prepare_data(dataset_name: str, context_length: int):
     )
 
     n_features = X_train.shape[1]
+
+    return X_train, y_train, X_test, y_test, n_features
+
+
+def prepare_data_rl(
+    dataset_name: str,
+    context_length: int,
+    n_observations: int = 17,
+    n_actions: int = 6,
+    forecasting_horizon: int = 96,
+    include_actions: bool = True,
+):
+    env_name, data_label = dataset_name.split("_")[0], dataset_name.split("_")[1]
+    data_label = "expert"
+    data_path = Path("src") / "dicl" / "data" / f"D4RL_{env_name}_{data_label}.csv"
+
+    # to use DICL-(s,a), set include_actions to True
+    if include_actions:
+        n_features = n_observations + n_actions
+    else:
+        n_features = n_observations
+
+    # load data to get a sample episode
+    X = pd.read_csv(data_path, index_col=0)
+    X = X.values.astype("float")
+
+    # find episodes beginnings. the restart column is equal to 1 at the start of
+    # an episode, 0 otherwise.
+    restart_index = n_observations + n_actions + 1
+    restarts = X[:, restart_index]
+
+    # get all episodes
+    episode_indices = np.where(np.append(restarts, 1))[0]
+
+    # Prepare lists to store training data
+    X_train_list = []
+    y_train_list = []
+    X_test_list = []
+    y_test_list = []
+
+    # Randomly select one episode for testing
+    test_episode_idx = np.random.randint(0, len(episode_indices) - 1)
+
+    # Process each episode
+    for i in range(len(episode_indices) - 1):
+        if i == test_episode_idx:
+            # Save test episode
+            start_idx = episode_indices[i]
+            end_idx = episode_indices[i + 1]
+            assert end_idx - start_idx >= context_length + forecasting_horizon, "Episo"
+            "de is too short"
+            for j in range(
+                end_idx - start_idx - context_length - forecasting_horizon + 1
+            ):
+                data_window = X[
+                    start_idx + j : start_idx
+                    + j
+                    + context_length
+                    + forecasting_horizon,
+                    :n_features,
+                ]
+                if not np.isnan(data_window).any():
+                    X_test_list.append(
+                        X[start_idx + j : start_idx + j + context_length, :n_features]
+                    )
+                    y_test_list.append(
+                        X[
+                            start_idx + j + context_length : start_idx
+                            + j
+                            + context_length
+                            + forecasting_horizon,
+                            :n_features,
+                        ]
+                    )
+            continue
+
+        # Process episode for training
+        start_idx = episode_indices[i]
+        end_idx = episode_indices[i + 1]
+
+        # Skip if episode is too short
+        if end_idx - start_idx < context_length + forecasting_horizon:
+            continue
+
+        # Create sliding windows
+        for j in range(end_idx - start_idx - context_length - forecasting_horizon + 1):
+            data_window = X[
+                start_idx + j : start_idx + j + context_length + forecasting_horizon,
+                :n_features,
+            ]
+            if not np.isnan(data_window).any():
+                X_train_list.append(
+                    X[start_idx + j : start_idx + j + context_length, :n_features]
+                )
+                y_train_list.append(
+                    X[
+                        start_idx + j + context_length : start_idx
+                        + j
+                        + context_length
+                        + forecasting_horizon,
+                        :n_features,
+                    ]
+                )
+
+    # Convert lists to arrays
+    X_train = np.array(X_train_list).swapaxes(-1, -2)
+    y_train = np.array(y_train_list).swapaxes(-1, -2)
+    X_test = np.array(X_test_list).swapaxes(-1, -2)
+    y_test = np.array(y_test_list).swapaxes(-1, -2)
 
     return X_train, y_train, X_test, y_test, n_features
 
@@ -136,6 +252,8 @@ def setup_logging(logger_name, log_level, log_dir) -> logging.Logger:
 
     # Create log filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_dir = os.path.join(log_dir, timestamp)
+    os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f"run_{timestamp}.log")
 
     # Set format for both handlers
@@ -157,4 +275,4 @@ def setup_logging(logger_name, log_level, log_dir) -> logging.Logger:
     root.addHandler(file_handler)
     root.addHandler(console_handler)
 
-    return root
+    return root, os.path.join(log_dir, timestamp)
