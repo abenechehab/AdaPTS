@@ -15,8 +15,10 @@ from dicl.utils.main_script import (
     save_metrics_to_csv,
     setup_logging,
     prepare_data,
+    prepare_data_rl,
     load_moment_model,
     load_moirai_model,
+    RL_DATASETS,
 )
 
 
@@ -37,14 +39,13 @@ class Args:
     logger_name: str = "DICL Adapter"
     log_level: str = "INFO"
     log_dir: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/logs")
-    max_n_components: Optional[int] = None
-    new_n_comp_every: int = 1
+    number_n_comp_to_try: int = 4
     inference_batch_size: int = 512
-    adapter_supervised_fine_tuning: bool = False
+    supervised: bool = False
 
 
 def main(args: Args):
-    logger = setup_logging(args.logger_name, args.log_level, args.log_dir)
+    logger, log_dir = setup_logging(args.logger_name, args.log_level, args.log_dir)
 
     # Set dataset name based on forecast horizon if not provided
     dataset_name = f"{args.dataset_name}_pred={args.forecast_horizon}"
@@ -52,9 +53,19 @@ def main(args: Args):
     start_time = time.time()
     logger.info(f"Starting data preparation for dataset: {dataset_name}")
 
-    X_train, y_train, X_test, y_test, n_features = prepare_data(
-        dataset_name, args.context_length
-    )
+    if args.dataset_name in RL_DATASETS:
+        X_train, y_train, X_test, y_test, n_features = prepare_data_rl(
+            dataset_name=dataset_name,
+            context_length=args.context_length,
+            n_observations=17,
+            n_actions=6,
+            forecasting_horizon=args.forecast_horizon,
+            include_actions=True,
+        )
+    else:
+        X_train, y_train, X_test, y_test, n_features = prepare_data(
+            dataset_name, args.context_length
+        )
     time_series = np.concatenate([X_test, y_test], axis=-1)
 
     logger.info(
@@ -63,15 +74,23 @@ def main(args: Args):
     )
 
     start = n_features if not args.adapter else 1
-    new_n_comp_every = 1 if not args.adapter else args.new_n_comp_every
-    if not args.max_n_components:
-        end = n_features + 1
-    else:
-        end = min(n_features + 1, args.max_n_components)
+    end = n_features
+    number_n_comp_to_try = 1 if not args.adapter else args.number_n_comp_to_try
 
     model_loaded = False
 
-    for n_components in range(start, end, new_n_comp_every):
+    if end > start:
+        possible_n_components = np.linspace(
+            start, end, min(number_n_comp_to_try, end - start)
+        ).astype("int32")
+    else:
+        possible_n_components = [n_features]
+
+    logger.info(
+        f"n_components to try between {start} and {end}: " f"{possible_n_components}"
+    )
+
+    for n_components in possible_n_components:
         start_time = time.time()
 
         if (not model_loaded) or args.is_fine_tuned:
@@ -104,6 +123,7 @@ def main(args: Args):
             new_num_channels=n_components,
             patch_window_size=None,
             base_projector=args.adapter,
+            device=args.device,
         )
 
         iclearner = icl_constructor(
@@ -124,10 +144,14 @@ def main(args: Args):
             f"{args.model_name}"
         )
         next_time_cp = time.time()
-        if args.adapter_supervised_fine_tuning:
+        if args.supervised:
+            # assert not args.is_fine_tuned, "iclearner must be frozen when adapter is "
+            # "(supervised) fine-tuned"
             DICL.adapter_supervised_fine_tuning(
                 X=X_train,
                 y=y_train,
+                device=args.device,
+                log_dir=Path(log_dir) / f"n_comp_{n_components}",
             )
         else:
             DICL.fit_disentangler(X=X_train)
@@ -183,7 +207,7 @@ def main(args: Args):
             args.context_length,
             args.forecast_horizon,
             args.data_path,
-            is_fine_tuned=args.is_fine_tuned,
+            is_fine_tuned="supervised" if args.supervised else args.is_fine_tuned,
             elapsed_time=time.time() - start_time,
             seed=args.seed,
         )
