@@ -47,7 +47,9 @@ class ICLTrainer(ABC):
     """ICLTrainer that takes a time serie and processes it using the LLM."""
 
     @abstractmethod
-    def update_context(self, time_series: NDArray[np.float32], **kwargs) -> ICLObject:
+    def update_context(
+        self, time_series: NDArray[np.float32] | torch.Tensor, **kwargs
+    ) -> ICLObject:
         """Update the context (internal state) with the given time serie."""
 
     @abstractmethod
@@ -393,7 +395,7 @@ class MomentICLTrainer(ICLTrainer):
 
     def update_context(
         self,
-        time_series: NDArray[np.float32],
+        time_series: NDArray[np.float32] | torch.Tensor,
         context_length: Optional[int] = None,
     ):
         """Updates the context with given time series data"""
@@ -417,9 +419,9 @@ class MomentICLTrainer(ICLTrainer):
         for dim in range(self.n_features):
             # MOMENT provides point estimates, so mean=mode=prediction, sigma=0
             preds = self.icl_object[dim].predictions
-            self.icl_object[dim].mean_arr = preds
-            self.icl_object[dim].mode_arr = preds
-            self.icl_object[dim].sigma_arr = np.zeros_like(preds)
+            self.icl_object[dim].mean_arr = preds.cpu().detach().numpy()
+            self.icl_object[dim].mode_arr = preds.cpu().detach().numpy()
+            self.icl_object[dim].sigma_arr = np.zeros_like(preds.cpu().detach().numpy())
         return self.icl_object
 
     def predict_long_horizon(
@@ -463,9 +465,14 @@ class MomentICLTrainer(ICLTrainer):
                     predictions[:, dim, :], axis=1
                 )
         else:
-            for dim in tqdm(range(self.n_features), desc="feature"):
+            for dim in tqdm(
+                range(self.n_features),
+                desc="feature",
+                disable=not bool(verbose),
+            ):
                 ts = self.icl_object[dim].time_series
-                tensor_ts = torch.from_numpy(ts).float().to(device)
+                tensor_ts = ts if isinstance(ts, torch.Tensor) else torch.from_numpy(ts)
+                tensor_ts = tensor_ts.float().to(device)
                 # takes in tensor of shape [batchsize, n_channels, context_length]
                 tensor_ts = tensor_ts.unsqueeze(1)
                 # Process in batches to avoid memory issues
@@ -477,12 +484,10 @@ class MomentICLTrainer(ICLTrainer):
                 ):
                     batch_end = min(i + batch_size, ts.shape[0])
                     batch_ts = tensor_ts[i:batch_end]
-                    batch_predictions = (
-                        self.model(x_enc=batch_ts).forecast.cpu().detach().numpy()
-                    )
+                    batch_predictions = self.model(x_enc=batch_ts).forecast
                     all_predictions.append(batch_predictions)
                 # Stack all batches together
-                predictions = np.concatenate(all_predictions, axis=0)
+                predictions = torch.concat(all_predictions, axis=0)
                 self.icl_object[dim].predictions = predictions
         return self.compute_statistics()
 
