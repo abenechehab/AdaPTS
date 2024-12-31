@@ -47,6 +47,7 @@ sns.lineplot(
     x="n_components",
     y="value",
     hue="adapter",
+    style="is_fine_tuned",
     markers=True,
     dashes=False,
 )
