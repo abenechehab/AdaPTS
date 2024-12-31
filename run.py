@@ -20,6 +20,7 @@ from dicl.utils.main_script import (
     load_moirai_model,
     RL_DATASETS,
 )
+from dicl.utils.preprocessing import get_gpu_memory_stats
 
 
 os.environ["HF_HOME"] = "/mnt/vdb/hugguingface/"
@@ -216,6 +217,20 @@ def main(args: Args):
             f"[{n_components}/{start}:{end}] overall runtime "
             f"{time.time() - start_time:.2f} seconds"
         )
+
+        # clean memory
+        del disentangler, iclearner, DICL
+
+        gpu_stats = get_gpu_memory_stats()
+        for gpu_id in gpu_stats:
+            if "allocated" in gpu_id:
+                gpu_num = gpu_id.split("_")[1]
+                allocated = gpu_stats[f"gpu_{gpu_num}_allocated(%)"]
+                reserved = gpu_stats[f"gpu_{gpu_num}_reserved(%)"]
+                logger.info(
+                    f"GPU {gpu_num} - Reserved: {reserved:.2f}%, Allocated: "
+                    f"{allocated:.2f}%"
+                )
 
 
 if __name__ == "__main__":
