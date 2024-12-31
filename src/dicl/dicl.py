@@ -11,7 +11,7 @@ import torch
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import make_pipeline
 
-from dicl.utils.preprocessing import AxisScaler
+from dicl.utils.preprocessing import AxisScaler, get_gpu_memory_stats
 
 if TYPE_CHECKING:
     from dicl.icl.iclearner import ICLTrainer, ICLObject
@@ -295,6 +295,7 @@ class DICL:
         self,
         X,
         y,
+        coeff_reconstruction=0.1,
         n_epochs=300,
         learning_rate=0.001,
         batch_size=16,
@@ -369,6 +370,11 @@ class DICL:
         best_val_loss = float("inf")
 
         for epoch in range(n_epochs):
+            # log gpu memory
+            gpu_stats = get_gpu_memory_stats()
+            for key, value in gpu_stats.items():
+                writer.add_scalar(f"gpu/{key}", value, epoch)
+
             total_loss = 0
             for batch_idx, (X_batch, y_batch) in enumerate(train_loader):
                 optimizer.zero_grad()
@@ -382,6 +388,14 @@ class DICL:
 
                 criterion = torch.nn.MSELoss()
                 loss = criterion(predictions, y_batch)
+
+                # reconstruction loss
+                reconstruction_loss = (
+                    self.disentangler.base_projector_.reconstruction_loss(
+                        X_batch.permute(0, 2, 1).reshape(-1, X_batch.shape[1])
+                    )
+                )
+                loss += coeff_reconstruction * reconstruction_loss
 
                 loss.backward()
                 optimizer.step()
