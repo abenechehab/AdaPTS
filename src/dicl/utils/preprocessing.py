@@ -2,6 +2,8 @@ import numpy as np
 
 from sklearn.base import TransformerMixin, BaseEstimator
 
+import torch
+
 
 def set_nan_to_zero(a):
     where_are_NaNs = np.isnan(a)
@@ -79,3 +81,37 @@ class AxisScaler(TransformerMixin, BaseEstimator):
                 X_scaled = self.scaler.inverse_transform(X_2d)
                 return X_scaled.reshape(shape)
         return self.scaler.inverse_transform(X)
+
+
+def get_gpu_memory_stats():
+    """
+    Get GPU memory statistics:
+    - Allocated: Memory actually used by tensors
+    - Reserved: Memory managed by caching allocator
+    - Total: Total GPU memory
+    - Percentages of usage
+    """
+    if not torch.cuda.is_available():
+        return {}
+
+    stats = {}
+    for i in range(torch.cuda.device_count()):
+        # Get memory in MB
+        allocated = torch.cuda.memory_allocated(i) / 1024**2
+        reserved = torch.cuda.memory_reserved(i) / 1024**2
+        total = torch.cuda.get_device_properties(i).total_memory / 1024**2
+
+        # Calculate percentages
+        allocated_percent = (allocated / total) * 100
+        reserved_percent = (reserved / total) * 100
+
+        stats.update(
+            {
+                f"gpu_{i}_allocated(%)": allocated_percent,
+                f"gpu_{i}_reserved(%)": reserved_percent,
+            }
+        )
+    return stats
+
+
+# Rest of the code remains same, just using the enhanced get_gpu_memory_stats()
