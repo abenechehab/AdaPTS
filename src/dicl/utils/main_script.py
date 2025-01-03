@@ -158,7 +158,10 @@ def prepare_data_rl(
             continue
 
         # Create sliding windows
-        for j in range(end_idx - start_idx - context_length - forecasting_horizon + 1):
+        starting_points = np.random.choice(
+            range(0, end_idx - start_idx - context_length - forecasting_horizon), 10
+        )
+        for j in starting_points:
             data_window = X[
                 start_idx + j : start_idx + j + context_length + forecasting_horizon,
                 :n_features,
