@@ -260,7 +260,7 @@ class LinearAutoEncoder(nn.Module):
         X,
         y=None,
         train_proportion=0.8,
-        n_epochs=100,
+        n_epochs=300,
         early_stopping_patience=10,
         learning_rate=1e-3,
         verbose=1,
@@ -357,7 +357,7 @@ class LinearAutoEncoder(nn.Module):
 
     def reconstruction_loss(self, X_batch):
         """Compute reconstruction loss"""
-        X_batch = torch.FloatTensor(X_batch).to(self.device)
+        X_batch = X_batch.to(self.device)
         X_reconstructed = self(X_batch)
         return nn.MSELoss()(X_reconstructed, X_batch).item()
 
@@ -611,6 +611,7 @@ class VariationalAutoEncoder(nn.Module):
 
     def reconstruction_loss(self, X_batch):
         """Compute reconstruction loss"""
+        X_batch = X_batch.to(self.device)
         encoding = self.encoder(X_batch)
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         z = self.reparameterize(mu, logvar)
