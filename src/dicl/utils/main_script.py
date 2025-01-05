@@ -58,23 +58,37 @@ def load_moirai_model(
     return model
 
 
-def prepare_data(dataset_name: str, context_length: int):
-    datareader = data_readers.DataReader(
-        data_path="/mnt/vdb/abenechehab/dicl-adapters/external_data/",
-        transform_ts_size=context_length,
-        univariate=False,
-    )
+def prepare_data(dataset_name: str, context_length: int, forecasting_horizon: int):
+    if dataset_name in RL_DATASETS:
+        X_train, y_train, X_test, y_test, n_features = prepare_data_rl(
+            dataset_name=dataset_name,
+            context_length=context_length,
+            n_observations=17,
+            n_actions=6,
+            forecasting_horizon=forecasting_horizon,
+            include_actions=True,
+        )
+        return X_train, y_train, None, None, X_test, y_test, n_features
+    else:
+        datareader = data_readers.DataReader(
+            data_path="/mnt/vdb/abenechehab/dicl-adapters/external_data/",
+            transform_ts_size=context_length,
+            univariate=False,
+        )
 
-    X_train, y_train = datareader.read_dataset(
-        dataset_name=dataset_name, training_set=True
-    )
-    X_test, y_test = datareader.read_dataset(
-        dataset_name=dataset_name, training_set=False
-    )
+        X_train, y_train = datareader.read_dataset(
+            dataset_name=dataset_name, setting="train"
+        )
+        X_val, y_val = datareader.read_dataset(
+            dataset_name=dataset_name, setting="val"
+        )
+        X_test, y_test = datareader.read_dataset(
+            dataset_name=dataset_name, setting="test"
+        )
 
-    n_features = X_train.shape[1]
+        n_features = X_train.shape[1]
 
-    return X_train, y_train, X_test, y_test, n_features
+        return X_train, y_train, X_val, y_val, X_test, y_test, n_features
 
 
 def prepare_data_rl(
