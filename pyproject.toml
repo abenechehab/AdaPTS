@@ -2,17 +2,10 @@
 requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
 
 [project]
-name = "DICL"
+name = "DICL_adapters"
 authors = [
   {name = "Abdelhakim Benechehab", email = "abdelhakim.benechehab@gmail.com"},
-  {name = "Youssef Attia El Hili", email = "youssef.attiaeh@gmail.com"},
-  {name = "Ambroise Odonnat", email = "ambroiseodonnattechnologie@gmail.com"},
-  {name = "Oussama Zekri", email = "oussama.zekri@ens-paris-saclay.fr"},
-  {name = "Albert Thomas", email = "albertthomas88@gmail.com"},
-  {name = "Giuseppe Paolo", email = "giuseppe.g.paolo@gmail.com"},
-  {name = "Maurizio Filippone", email = "maurizio.filippone@kaust.edu.sa"},
-  {name = "Ievgen Redko", email = "ievgen.redko@huawei.com"},
-  {name = "Balázs Kégl", email = "balazs.kegl@gmail.com"},
+  {name = "Vasilii Feofanov", email = "vasilii.feofanov@huawei.com"},
 ]
 maintainers = [
   {name = "Abdelhakim Benechehab", email = "abdelhakim.benechehab@gmail.com"},
@@ -32,6 +25,7 @@ classifiers = [
 [project.optional-dependencies]
 dev = ['ruff', 'pre-commit', 'black']
 rl = ['gym==0.26.2', 'gymnasium==0.28.1', 'mujoco==2.3.3', 'dm-control==1.0.11', 'shimmy[gym-v26, dm-control]', 'stable-baselines3==2.0.0', 'tensorflow==2.17.0']
+hyperopt = ['ray[tune]==2.40.0', 'hebo==0.3.6']
 
 [tool.setuptools]
 license-files = ['LICEN[CS]E*', 'COPYING*', 'NOTICE*', 'AUTHORS*']
