@@ -99,6 +99,11 @@ class MultiVariateICLTrainer(ICLTrainer):
             None for _ in range(self.n_features)
         ]
 
+    def reset(self):
+        """Resets the internal state of the trainer."""
+        self.icl_object = [ICLObject() for _ in range(self.n_features)]
+        self.kv_cache = [None for _ in range(self.n_features)]
+
     def update_context(
         self,
         time_series: NDArray[np.float32],
