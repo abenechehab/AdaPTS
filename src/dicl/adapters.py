@@ -116,7 +116,7 @@ class MultichannelProjector:
         # you can give your own base_projector with fit() and transform() methods, and
         # it should have the argument `n_components`.
         else:
-            self.base_projector_ = base_projector(n_components=n_components)
+            self.base_projector_ = base_projector
 
     def fit(self, X, y: Optional[NDArray] = None):
         X_transposed = np.swapaxes(X, 1, 2)
