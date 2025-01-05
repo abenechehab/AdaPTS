@@ -108,7 +108,7 @@ class DataReader:
             "EEG",
         ]
 
-    def read_dataset(self, dataset_name, training_set=True):
+    def read_dataset(self, dataset_name, training_set=True, setting="train"):
         """
         dataset_name: if it's of the form "name:idx", then it will select only channel
         idx
@@ -145,7 +145,7 @@ class DataReader:
             )
             data = self._read_forecasting_dataset(
                 dataset_name_,
-                training_set=training_set,
+                setting=setting,
                 seq_len=self.transform_ts_size,
                 pred_len=pred_len,
                 time_increment=1,
@@ -298,7 +298,7 @@ class DataReader:
     def _read_forecasting_dataset(
         self,
         dataset_name,
-        training_set,
+        setting,
         seq_len,
         pred_len,
         time_increment=1,
@@ -347,13 +347,21 @@ class DataReader:
             scaler.transform(df.values) for df in [train_df, val_df, test_df]
         ]
 
-        if training_set:
+        if "train" in setting:
             x, y = loading.construct_sliding_window_data(
                 train_df, seq_len, pred_len, time_increment, feature_idx, target_idx
             )
-        else:
+        elif "test" in setting:
             x, y = loading.construct_sliding_window_data(
                 test_df, seq_len, pred_len, time_increment, feature_idx, target_idx
+            )
+        elif "val" in setting:
+            x, y = loading.construct_sliding_window_data(
+                val_df, seq_len, pred_len, time_increment, feature_idx, target_idx
+            )
+        else:
+            raise ValueError(
+                "Unknown setting. must contain either 'train', 'test' or 'val'"
             )
 
         # TODO: y now is not 3D, it's flatten
