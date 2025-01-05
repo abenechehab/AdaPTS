@@ -15,10 +15,8 @@ from dicl.utils.main_script import (
     save_metrics_to_csv,
     setup_logging,
     prepare_data,
-    prepare_data_rl,
     load_moment_model,
     load_moirai_model,
-    RL_DATASETS,
 )
 from dicl.utils.preprocessing import get_gpu_memory_stats
 
@@ -54,19 +52,9 @@ def main(args: Args):
     start_time = time.time()
     logger.info(f"Starting data preparation for dataset: {dataset_name}")
 
-    if args.dataset_name in RL_DATASETS:
-        X_train, y_train, X_test, y_test, n_features = prepare_data_rl(
-            dataset_name=dataset_name,
-            context_length=args.context_length,
-            n_observations=17,
-            n_actions=6,
-            forecasting_horizon=args.forecast_horizon,
-            include_actions=True,
-        )
-    else:
-        X_train, y_train, X_test, y_test, n_features = prepare_data(
-            dataset_name, args.context_length
-        )
+    X_train, y_train, X_val, y_val, X_test, y_test, n_features = prepare_data(
+        dataset_name, args.context_length, args.forecast_horizon
+    )
     time_series = np.concatenate([X_test, y_test], axis=-1)
 
     logger.info(
@@ -149,13 +137,13 @@ def main(args: Args):
             # assert not args.is_fine_tuned, "iclearner must be frozen when adapter is "
             # "(supervised) fine-tuned"
             DICL.adapter_supervised_fine_tuning(
-                X=X_train,
-                y=y_train,
+                X=np.concatenate([X_train, X_val], axis=0),
+                y=np.concatenate([y_train, y_val], axis=0),
                 device=args.device,
                 log_dir=Path(log_dir) / f"n_comp_{n_components}",
             )
         else:
-            DICL.fit_disentangler(X=X_train)
+            DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
 
         logger.info(
             f"[{n_components}/{start}:{end}] adapter fitted in "
@@ -180,11 +168,12 @@ def main(args: Args):
             )
             next_time_cp = time.time()
 
-        _, _, _, _ = DICL.predict_multi_step(
-            X=time_series,
-            prediction_horizon=args.forecast_horizon,
-            batch_size=args.inference_batch_size,
-        )
+        with torch.no_grad():
+            _, _, _, _ = DICL.predict_multi_step(
+                X=time_series,
+                prediction_horizon=args.forecast_horizon,
+                batch_size=args.inference_batch_size,
+            )
 
         logger.info(
             f"[{n_components}/{start}:{end}] multi-step prediction done in "
