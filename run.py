@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 import time
+import random
+
 from dataclasses import dataclass
 from typing import Optional
 import tyro
@@ -37,13 +39,21 @@ class Args:
     device: str = "cpu"
     logger_name: str = "DICL Adapter"
     log_level: str = "INFO"
-    log_dir: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/logs")
+    log_dir: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/logs/logger")
     number_n_comp_to_try: int = 4
     inference_batch_size: int = 512
     supervised: bool = False
 
 
 def main(args: Args):
+    # Set seeds for reproducibility
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     logger, log_dir = setup_logging(args.logger_name, args.log_level, args.log_dir)
 
     # Set dataset name based on forecast horizon if not provided
@@ -137,8 +147,10 @@ def main(args: Args):
             # assert not args.is_fine_tuned, "iclearner must be frozen when adapter is "
             # "(supervised) fine-tuned"
             DICL.adapter_supervised_fine_tuning(
-                X=np.concatenate([X_train, X_val], axis=0),
-                y=np.concatenate([y_train, y_val], axis=0),
+                X_train=X_train,
+                y_train=y_train,
+                X_val=X_val,
+                y_val=y_val,
                 device=args.device,
                 log_dir=Path(log_dir) / f"n_comp_{n_components}",
             )
