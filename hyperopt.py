@@ -1,7 +1,10 @@
 import os
+import time
+import random
 from typing import Dict, Any
 from dataclasses import dataclass
 import tyro
+from pathlib import Path
 
 import torch
 import numpy as np
@@ -16,7 +19,11 @@ from dicl import adapters
 from dicl.dicl import DICL
 from dicl.icl import iclearner as icl
 from dicl.adapters import SimpleAutoEncoder, LinearAutoEncoder, VariationalAutoEncoder
-from dicl.utils.main_script import load_moment_model, prepare_data
+from dicl.utils.main_script import (
+    load_moment_model,
+    prepare_data,
+    save_hyperopt_metrics_to_csv,
+)
 
 ADAPTER_CLS = {
     "simpleAE": SimpleAutoEncoder,
@@ -58,22 +65,15 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
 
 def train_adapter(
     config: Dict[str, Any],
+    dataset_name: str,
     model_name: str,
     adapter_type: str,
     n_components: int,
     forecasting_horizon: int,
     context_length: int,
+    seed: int,
 ):
     """Training function for Ray Tune"""
-    # Get worker information
-    worker_id = train.get_context().get_trial_id()
-
-    cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "Not Set")
-    gpu_available = torch.cuda.is_available()
-
-    print(f"\nWorker {worker_id} Environment:")
-    print(f"CUDA_VISIBLE_DEVICES: {cuda_devices}")
-    print(f"GPU Available: {gpu_available}")
 
     # Force GPU usage if available in the worker
     if torch.cuda.is_available():
@@ -82,10 +82,11 @@ def train_adapter(
         device = "cpu"
 
     # data
-    X_train, y_train, X_val, y_val, _, _, n_features = prepare_data(
+    X_train, y_train, X_val, y_val, X_test, y_test, n_features = prepare_data(
         dataset_name, context_length, forecasting_horizon
     )
     time_series_val = np.concatenate([X_val, y_val], axis=-1)
+    time_series_test = np.concatenate([X_test, y_test], axis=-1)
 
     # Configure adapter
     adapter_params = {
@@ -122,6 +123,7 @@ def train_adapter(
         icl_constructor = icl.MomentICLTrainer
     else:
         raise ValueError(f"Not supported model: {model_name}")
+    start_time = time.time()
     # iclearner
     iclearner = icl_constructor(
         model=model,
@@ -146,7 +148,9 @@ def train_adapter(
     )
 
     # training
-    dicl_model.adapter_supervised_fine_tuning(X_train, y_train, **training_params)
+    dicl_model.adapter_supervised_fine_tuning(
+        X_train, y_train, X_val, y_val, **training_params
+    )
 
     # Evaluate
     with torch.no_grad():
@@ -155,6 +159,33 @@ def train_adapter(
             prediction_horizon=forecasting_horizon,
         )
         metrics = dicl_model.compute_metrics()
+        _, _, _, _ = dicl_model.predict_multi_step(
+            X=time_series_test,
+            prediction_horizon=forecasting_horizon,
+        )
+        test_metrics = dicl_model.compute_metrics()
+
+    metrics.update({f"test_{k}": v for k, v in test_metrics.items()})
+
+    # Save metrics to CSV
+    save_hyperopt_metrics_to_csv(
+        metrics=metrics,
+        dataset_name=dataset_name,
+        model_name=model_name,
+        adapter=adapter_type,
+        n_features=n_features,
+        n_components=n_components,
+        context_length=context_length,
+        forecasting_horizon=forecasting_horizon,
+        num_layers=config.get("num_layers", 0),
+        hidden_dim=config.get("hidden_dim", 0),
+        learning_rate=config["learning_rate"],
+        batch_size=config["batch_size"],
+        coeff_reconstruction=config["coeff_reconstruction"],
+        data_path=Path("/mnt/vdb/abenechehab/dicl-adapters/results/hyperopt.csv"),
+        elapsed_time=time.time() - start_time,
+        seed=seed,
+    )
 
     return metrics
 
@@ -168,6 +199,7 @@ def optimize_adapter(
     context_length: int,
     max_epochs: int = 300,
     gpu_fraction_per_worker: float = 1.0,
+    seed: int = 13,
 ):
     """Run hyperparameter optimization using Ray Tune with HEBO"""
 
@@ -202,11 +234,13 @@ def optimize_adapter(
     def objective(config):
         return train_adapter(
             config,
+            dataset_name,
             model_name,
             adapter_type,
             n_components,
             forecasting_horizon,
             context_length,
+            seed,
         )
 
     # Set up tuner with scheduler and resources per trial
@@ -225,7 +259,7 @@ def optimize_adapter(
         ),
         param_space=search_space,
         run_config=RunConfig(
-            name=f"{dataset_name}_{adapter_type}",
+            name=f"{dataset_name}_{adapter_type}_ncomp{n_components}",
             storage_path=ray_results_dir,
         ),
     )
@@ -243,6 +277,14 @@ def optimize_adapter(
 # Example usage:
 if __name__ == "__main__":
     args = tyro.cli(Args)
+
+    # Set seeds for reproducibility
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # data
     dataset_name = f"{args.dataset_name}_pred={args.forecasting_horizon}"
@@ -265,6 +307,7 @@ if __name__ == "__main__":
             forecasting_horizon=args.forecasting_horizon,
             context_length=args.context_length,
             gpu_fraction_per_worker=args.gpu_fraction_per_worker,
+            seed=args.seed,
         )
-        print(f"Best config for {args.adapter}:")
+        print(f"Best config for {args.adapter} with n_comp {n_components}:")
         print(best_config)

@@ -79,9 +79,7 @@ def prepare_data(dataset_name: str, context_length: int, forecasting_horizon: in
         X_train, y_train = datareader.read_dataset(
             dataset_name=dataset_name, setting="train"
         )
-        X_val, y_val = datareader.read_dataset(
-            dataset_name=dataset_name, setting="val"
-        )
+        X_val, y_val = datareader.read_dataset(dataset_name=dataset_name, setting="val")
         X_test, y_test = datareader.read_dataset(
             dataset_name=dataset_name, setting="test"
         )
@@ -254,6 +252,75 @@ def save_metrics_to_csv(
         for metric, value in metrics.items():
             row = data_row + [metric, value]
             writer.writerow(row)
+
+
+def save_hyperopt_metrics_to_csv(
+    metrics,
+    dataset_name,
+    model_name,
+    adapter,
+    n_features,
+    n_components,
+    context_length,
+    forecasting_horizon,
+    num_layers,
+    hidden_dim,
+    learning_rate,
+    batch_size,
+    coeff_reconstruction,
+    data_path,
+    elapsed_time,
+    seed,
+):
+    columns = [
+        "dataset",
+        "foundational_model",
+        "adapter",
+        "n_features",
+        "n_components",
+        "context_length",
+        "forecasting_horizon",
+        "num_layers",
+        "hidden_dim",
+        "learning_rate",
+        "batch_size",
+        "coeff_reconstruction",
+        "running_time",
+        "seed",
+        "mse",
+        "mae",
+        "test_mse",
+        "test_mae",
+    ]
+
+    data_row = [
+        dataset_name,
+        model_name,
+        adapter,
+        n_features,
+        n_components,
+        context_length,
+        forecasting_horizon,
+        num_layers,
+        hidden_dim,
+        learning_rate,
+        batch_size,
+        coeff_reconstruction,
+        elapsed_time,
+        seed,
+        metrics["mse"],
+        metrics["mae"],
+        metrics["test_mse"],
+        metrics["test_mae"],
+    ]
+
+    file_exists = data_path.exists()
+
+    with open(data_path, "a" if file_exists else "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        if not file_exists:
+            writer.writerow(columns)
+        writer.writerow(data_row)
 
 
 # At the start of your program, configure logging once:
