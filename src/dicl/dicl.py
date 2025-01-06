@@ -293,8 +293,10 @@ class DICL:
 
     def adapter_supervised_fine_tuning(
         self,
-        X,
-        y,
+        X_train,
+        y_train,
+        X_val=None,
+        y_val=None,
         coeff_reconstruction=0.1,
         n_epochs=300,
         learning_rate=0.001,
@@ -309,21 +311,35 @@ class DICL:
             self.disentangler.base_projector_, torch.nn.Module
         ), "Disentangler must be a PyTorch Module"
 
-        self.scaler.fit(np.concatenate([X, y], axis=-1))
-        X_scaled, y_scaled = self.scaler.transform(X), self.scaler.transform(y)
+        self.scaler.fit(np.concatenate([X_train, y_train], axis=-1))
+        X_scaled, y_scaled = (
+            self.scaler.transform(X_train),
+            self.scaler.transform(y_train),
+        )
 
         # Create dataset
-        dataset = torch.utils.data.TensorDataset(
+        train_dataset = torch.utils.data.TensorDataset(
             torch.tensor(X_scaled, dtype=torch.float32),
             torch.tensor(y_scaled, dtype=torch.float32),
         )
 
         # Split into train and validation sets (80-20 split)
-        train_size = int(0.8 * len(dataset))
-        val_size = len(dataset) - train_size
-        train_dataset, val_dataset = torch.utils.data.random_split(
-            dataset, [train_size, val_size]
-        )
+        if (X_val is None) or (y_val is None):
+            train_size = int(0.8 * len(train_dataset))
+            val_size = len(train_dataset) - train_size
+            train_dataset, val_dataset = torch.utils.data.random_split(
+                train_dataset, [train_size, val_size]
+            )
+        else:
+            X_val_scaled, y_val_scaled = (
+                self.scaler.transform(X_val),
+                self.scaler.transform(y_val),
+            )
+            val_dataset = torch.utils.data.TensorDataset(
+                torch.tensor(X_val_scaled, dtype=torch.float32),
+                torch.tensor(y_val_scaled, dtype=torch.float32),
+            )
+            val_size = len(val_dataset)
 
         # Create data loaders
         train_loader = torch.utils.data.DataLoader(
@@ -407,7 +423,7 @@ class DICL:
                     "Loss/batch", loss.item(), epoch * len(train_loader) + batch_idx
                 )
 
-            avg_loss = total_loss * batch_size / len(dataset)
+            avg_loss = total_loss * batch_size / len(train_dataset)
             # Log epoch metrics
             writer.add_scalar("Loss/training", avg_loss, epoch)
             writer.add_scalar("Learning_rate", optimizer.param_groups[0]["lr"], epoch)
