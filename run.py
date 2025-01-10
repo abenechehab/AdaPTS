@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import time
 import random
@@ -24,6 +25,7 @@ from dicl.utils.preprocessing import get_gpu_memory_stats
 
 
 os.environ["HF_HOME"] = "/mnt/vdb/hugguingface/"
+FULL_COMP_ADAPTERS = ["flow"]
 
 
 @dataclass
@@ -54,10 +56,22 @@ def main(args: Args):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    logger, log_dir = setup_logging(args.logger_name, args.log_level, args.log_dir)
-
     # Set dataset name based on forecast horizon if not provided
     dataset_name = f"{args.dataset_name}_pred={args.forecast_horizon}"
+
+    logger, log_dir = setup_logging(
+        args.logger_name,
+        args.log_level,
+        args.log_dir,
+        dataset_name,
+        args.adapter,
+        args.model_name.split("/")[-1],
+    )
+
+    # Write args as json to config file in log directory
+    args_dict = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
+    with open(Path(log_dir) / "config.json", "w") as f:
+        json.dump(args_dict, f, indent=4)
 
     start_time = time.time()
     logger.info(f"Starting data preparation for dataset: {dataset_name}")
@@ -72,7 +86,7 @@ def main(args: Args):
         f"Preparation completed in {time.time() - start_time:.2f} seconds"
     )
 
-    start = n_features if not args.adapter else 1
+    start = n_features if not args.adapter or args.adapter in FULL_COMP_ADAPTERS else 1
     end = n_features
     number_n_comp_to_try = 1 if not args.adapter else args.number_n_comp_to_try
 
@@ -156,9 +170,14 @@ def main(args: Args):
             )
         else:
             DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
+        if args.adapter:
+            torch.save(
+                DICL.disentangler.base_projector_,
+                Path(log_dir) / f"n_comp_{n_components}/" / "adapter.pt",
+            )
 
         logger.info(
-            f"[{n_components}/{start}:{end}] adapter fitted in "
+            f"[{n_components}/{start}:{end}] adapter fitted and saved in "
             f"{time.time() - next_time_cp:.2f} seconds"
         )
         next_time_cp = time.time()
