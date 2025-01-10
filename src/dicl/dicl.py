@@ -297,7 +297,7 @@ class DICL:
         y_train,
         X_val=None,
         y_val=None,
-        coeff_reconstruction=0.1,
+        coeff_reconstruction=0.0,
         n_epochs=300,
         learning_rate=0.001,
         batch_size=16,
