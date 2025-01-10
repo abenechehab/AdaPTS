@@ -263,68 +263,48 @@ def save_hyperopt_metrics_to_csv(
     n_components,
     context_length,
     forecasting_horizon,
-    num_layers,
-    hidden_dim,
-    learning_rate,
-    batch_size,
-    coeff_reconstruction,
+    config: dict,
     data_path,
     elapsed_time,
     seed,
 ):
-    columns = [
-        "dataset",
-        "foundational_model",
-        "adapter",
-        "n_features",
-        "n_components",
-        "context_length",
-        "forecasting_horizon",
-        "num_layers",
-        "hidden_dim",
-        "learning_rate",
-        "batch_size",
-        "coeff_reconstruction",
-        "running_time",
-        "seed",
-        "mse",
-        "mae",
-        "test_mse",
-        "test_mae",
-    ]
+    df_hyperopt = pd.read_csv(data_path)
 
-    data_row = [
-        dataset_name,
-        model_name,
-        adapter,
-        n_features,
-        n_components,
-        context_length,
-        forecasting_horizon,
-        num_layers,
-        hidden_dim,
-        learning_rate,
-        batch_size,
-        coeff_reconstruction,
-        elapsed_time,
-        seed,
-        metrics["mse"],
-        metrics["mae"],
-        metrics["test_mse"],
-        metrics["test_mae"],
-    ]
+    # Create a new row as a dictionary
+    new_row = {
+        "dataset": dataset_name,
+        "model": model_name,
+        "adapter": adapter,
+        "n_features": n_features,
+        "n_components": n_components,
+        "context_length": context_length,
+        "forecasting_horizon": forecasting_horizon,
+        "running_time": elapsed_time,
+        "seed": seed,
+    }
 
-    file_exists = data_path.exists()
+    # Add metrics to the row
+    for metric_name, value in metrics.items():
+        new_row[metric_name] = value
 
-    with open(data_path, "a" if file_exists else "w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        if not file_exists:
-            writer.writerow(columns)
-        writer.writerow(data_row)
+    # Add config hyperparameters to the row
+    for param_name, param_value in config.items():
+        if "scaled" not in param_name:
+            if param_name not in df_hyperopt.columns:
+                df_hyperopt[param_name] = "None"
+            new_row[param_name] = param_value
+
+    # Append the new row to df_hyperopt
+    df_hyperopt = pd.concat([df_hyperopt, pd.DataFrame([new_row])], ignore_index=True)
+
+    # Save the updated dataframe
+    df_hyperopt.to_csv(data_path, index=False)
 
 
 # At the start of your program, configure logging once:
-def setup_logging(logger_name, log_level, log_dir) -> logging.Logger:
+def setup_logging(
+    logger_name, log_level, log_dir, dataset_name, adapter, model_name
+) -> logging.Logger:
     # Clear existing handlers
     root = logging.getLogger(logger_name)
     if root.handlers:
@@ -336,7 +316,9 @@ def setup_logging(logger_name, log_level, log_dir) -> logging.Logger:
 
     # Create log filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = os.path.join(log_dir, timestamp)
+    log_dir = os.path.join(
+        log_dir, f"{timestamp}_{dataset_name}_{adapter}_{model_name}"
+    )
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f"run_{timestamp}.log")
 
@@ -359,4 +341,4 @@ def setup_logging(logger_name, log_level, log_dir) -> logging.Logger:
     root.addHandler(file_handler)
     root.addHandler(console_handler)
 
-    return root, os.path.join(log_dir, timestamp)
+    return root, log_dir
