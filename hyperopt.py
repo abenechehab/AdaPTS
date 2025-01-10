@@ -18,7 +18,12 @@ from ray.tune.search.hebo import HEBOSearch
 from dicl import adapters
 from dicl.dicl import DICL
 from dicl.icl import iclearner as icl
-from dicl.adapters import SimpleAutoEncoder, LinearAutoEncoder, VariationalAutoEncoder
+from dicl.adapters import (
+    SimpleAutoEncoder,
+    LinearAutoEncoder,
+    VariationalAutoEncoder,
+    NormalizingFlow,
+)
 from dicl.utils.main_script import (
     load_moment_model,
     prepare_data,
@@ -29,7 +34,9 @@ ADAPTER_CLS = {
     "simpleAE": SimpleAutoEncoder,
     "linearAE": LinearAutoEncoder,
     "VAE": VariationalAutoEncoder,
+    "flow": NormalizingFlow,
 }
+FULL_COMP_ADAPTERS = ["flow"]
 
 
 @dataclass
@@ -42,21 +49,35 @@ class Args:
     number_n_comp_to_try: int = 4
     adapter: str = "linearAE"
     gpu_fraction_per_worker: float = 1.0
+    num_samples: int = 100
 
 
 def get_search_space(adapter_type: str) -> Dict[str, Any]:
     """Define search space for each adapter type"""
     base_space = {
-        "learning_rate": tune.choice([1e-4, 1e-3, 1e-2]),
+        "learning_rate": tune.choice([1e-3, 1e-2]),
         "batch_size": tune.choice([32, 64]),
-        "coeff_reconstruction": tune.choice([1e-2, 1e-1, 1.0, 10.0]),
     }
 
     if adapter_type in ["simpleAE", "VAE"]:
         base_space.update(
             {
-                "num_layers": tune.choice([0, 1, 2]),
+                "num_layers": tune.choice([1, 2]),
                 "hidden_dim": tune.choice([64, 128]),
+                "coeff_reconstruction": tune.choice([0.0, 1e-2, 1e-1]),
+            }
+        )
+    elif adapter_type in ["linearAE"]:
+        base_space.update(
+            {
+                "coeff_reconstruction": tune.choice([0.0, 1e-2, 1e-1]),
+            }
+        )
+    elif adapter_type in ["flow"]:
+        base_space.update(
+            {
+                "num_coupling": tune.choice([1, 2]),
+                "hidden_dim": tune.choice([64, 128, 256]),
             }
         )
 
@@ -91,14 +112,25 @@ def train_adapter(
     # Configure adapter
     adapter_params = {
         "input_dim": n_features,
-        "n_components": n_components,
         "device": device,  # Use the determined device
     }
-
+    if adapter_type not in FULL_COMP_ADAPTERS:
+        adapter_params.update(
+            {
+                "n_components": n_components,
+            }
+        )
     if adapter_type in ["simpleAE", "VAE"]:
         adapter_params.update(
             {
                 "num_layers": config["num_layers"],
+                "hidden_dim": config["hidden_dim"],
+            }
+        )
+    elif adapter_type in ["flow"]:
+        adapter_params.update(
+            {
+                "num_coupling": config["num_coupling"],
                 "hidden_dim": config["hidden_dim"],
             }
         )
@@ -109,7 +141,7 @@ def train_adapter(
     training_params = {
         "learning_rate": config["learning_rate"],
         "batch_size": config["batch_size"],
-        "coeff_reconstruction": config["coeff_reconstruction"],
+        "coeff_reconstruction": config.get("coeff_reconstruction", 0),
         "early_stopping_patience": 10,
         "device": device,  # Use the determined device
         "log_dir": train.get_context().get_trial_dir(),
@@ -177,11 +209,7 @@ def train_adapter(
         n_components=n_components,
         context_length=context_length,
         forecasting_horizon=forecasting_horizon,
-        num_layers=config.get("num_layers", 0),
-        hidden_dim=config.get("hidden_dim", 0),
-        learning_rate=config["learning_rate"],
-        batch_size=config["batch_size"],
-        coeff_reconstruction=config["coeff_reconstruction"],
+        config=config,
         data_path=Path("/mnt/vdb/abenechehab/dicl-adapters/results/hyperopt.csv"),
         elapsed_time=time.time() - start_time,
         seed=seed,
@@ -197,8 +225,8 @@ def optimize_adapter(
     n_components: int,
     forecasting_horizon: int,
     context_length: int,
-    max_epochs: int = 300,
-    gpu_fraction_per_worker: float = 1.0,
+    num_samples: int,
+    gpu_fraction_per_worker: float,
     seed: int = 13,
 ):
     """Run hyperparameter optimization using Ray Tune with HEBO"""
@@ -221,7 +249,7 @@ def optimize_adapter(
     search_space = get_search_space(adapter_type)
 
     # Define scheduler and search algorithm
-    scheduler = ASHAScheduler(max_t=max_epochs, grace_period=50, reduction_factor=2)
+    scheduler = ASHAScheduler(max_t=300, grace_period=50, reduction_factor=2)
 
     # Use HEBO as the search algorithm
     search_alg = HEBOSearch(
@@ -253,7 +281,7 @@ def optimize_adapter(
             metric="mse",  # Change this to the metric you care about
             mode="min",
             search_alg=search_alg,
-            num_samples=50,
+            num_samples=num_samples,
             max_concurrent_trials=int(8 / gpu_fraction_per_worker),
             scheduler=scheduler,  # Scheduler is included here
         ),
@@ -293,9 +321,12 @@ if __name__ == "__main__":
     )
 
     # n_components
-    possible_n_components = np.linspace(
-        1, n_features, min(args.number_n_comp_to_try, n_features - 1)
-    ).astype("int32")
+    if args.adapter in FULL_COMP_ADAPTERS:
+        possible_n_components = np.array([n_features])
+    else:
+        possible_n_components = np.linspace(
+            1, n_features, min(args.number_n_comp_to_try, n_features - 1)
+        ).astype("int32")
 
     for n_components in possible_n_components:
         print(f"\nOptimizing {args.adapter}...")
@@ -306,6 +337,7 @@ if __name__ == "__main__":
             n_components=n_components,
             forecasting_horizon=args.forecasting_horizon,
             context_length=args.context_length,
+            num_samples=args.num_samples,
             gpu_fraction_per_worker=args.gpu_fraction_per_worker,
             seed=args.seed,
         )
