@@ -113,6 +113,11 @@ class MultichannelProjector:
                 input_dim=self.num_channels,
                 device=device,
             ).to(torch.device(device))
+        elif base_projector == "flow":
+            self.base_projector_ = NormalizingFlow(
+                input_dim=self.num_channels,
+                device=device,
+            ).to(torch.device(device))
         # you can give your own base_projector with fit() and transform() methods, and
         # it should have the argument `n_components`.
         else:
@@ -388,27 +393,29 @@ class SimpleAutoEncoder(nn.Module):
         self.encoder = nn.Sequential()
         self.encoder.add_module("layer0", nn.Linear(input_dim, hidden_dim))
         self.encoder.add_module("layer0-bn", nn.BatchNorm1d(int(hidden_dim)))
-        self.encoder.add_module("layer0-act", nn.ReLU())
+        self.encoder.add_module("layer0-act", nn.LeakyReLU())
         for i in range(1, num_layers):
             self.encoder.add_module(f"layer{i}", nn.Linear(hidden_dim, hidden_dim))
             self.encoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
-            self.encoder.add_module(f"layer{i}-act", nn.ReLU())
+            self.encoder.add_module(f"layer{i}-act", nn.LeakyReLU())
         self.encoder.add_module(
-            f"layer{num_layers}", nn.Linear(hidden_dim, n_components)
+            f"layer{num_layers+1}", nn.Linear(hidden_dim, n_components)
         )
-        self.encoder.add_module(f"layer{num_layers}-act", nn.ReLU())
+        self.encoder.add_module(f"layer{num_layers+1}-act", nn.LeakyReLU())
 
         # Build decoder layers
         self.decoder = nn.Sequential()
         self.decoder.add_module("layer0", nn.Linear(n_components, hidden_dim))
         self.decoder.add_module("layer0-bn", nn.BatchNorm1d(int(hidden_dim)))
-        self.decoder.add_module("layer0-act", nn.ReLU())
+        self.decoder.add_module("layer0-act", nn.LeakyReLU())
         for i in range(1, num_layers):
             self.decoder.add_module(f"layer{i}", nn.Linear(hidden_dim, hidden_dim))
             self.decoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
-            self.decoder.add_module(f"layer{i}-act", nn.ReLU())
-        self.decoder.add_module(f"layer{num_layers}", nn.Linear(hidden_dim, input_dim))
-        self.decoder.add_module(f"layer{num_layers}-act", nn.ReLU())
+            self.decoder.add_module(f"layer{i}-act", nn.LeakyReLU())
+        self.decoder.add_module(
+            f"layer{num_layers+1}", nn.Linear(hidden_dim, input_dim)
+        )
+        self.decoder.add_module(f"layer{num_layers+1}-act", nn.Tanh())
 
     def forward(self, x):
         """Forward pass through autoencoder"""
@@ -546,31 +553,29 @@ class VariationalAutoEncoder(nn.Module):
         self.encoder = nn.Sequential()
         self.encoder.add_module("layer0", nn.Linear(input_dim, hidden_dim))
         self.encoder.add_module("layer0-bn", nn.BatchNorm1d(int(hidden_dim)))
-        self.encoder.add_module("layer0-act", nn.ReLU())
+        self.encoder.add_module("layer0-act", nn.LeakyReLU())
         for i in range(1, num_layers):
             self.encoder.add_module(f"layer{i}", nn.Linear(hidden_dim, hidden_dim))
             self.encoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
-            self.encoder.add_module(f"layer{i}-act", nn.ReLU())
-        self.encoder.add_module(
-            f"layer{num_layers}", nn.Linear(hidden_dim, n_components)
-        )
-        self.encoder.add_module(f"layer{num_layers}-act", nn.ReLU())
+            self.encoder.add_module(f"layer{i}-act", nn.LeakyReLU())
 
         # Build decoder layers
         self.decoder = nn.Sequential()
         self.decoder.add_module("layer0", nn.Linear(n_components, hidden_dim))
         self.decoder.add_module("layer0-bn", nn.BatchNorm1d(int(hidden_dim)))
-        self.decoder.add_module("layer0-act", nn.ReLU())
+        self.decoder.add_module("layer0-act", nn.LeakyReLU())
         for i in range(1, num_layers):
             self.decoder.add_module(f"layer{i}", nn.Linear(hidden_dim, hidden_dim))
             self.decoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
-            self.decoder.add_module(f"layer{i}-act", nn.ReLU())
-        self.decoder.add_module(f"layer{num_layers}", nn.Linear(hidden_dim, input_dim))
-        self.decoder.add_module(f"layer{num_layers}-act", nn.ReLU())
+            self.decoder.add_module(f"layer{i}-act", nn.LeakyReLU())
+        self.decoder.add_module(
+            f"layer{num_layers+1}", nn.Linear(hidden_dim, input_dim)
+        )
+        self.decoder.add_module(f"layer{num_layers+1}-act", nn.Tanh())
 
         # Build latent space layers
-        self.latent_mu = nn.Linear(n_components, n_components)
-        self.latent_logvar = nn.Linear(n_components, n_components)
+        self.latent_mu = nn.Linear(hidden_dim, n_components)
+        self.latent_logvar = nn.Linear(hidden_dim, n_components)
 
     def reparameterize(self, mu, logvar):
         """Reparameterization trick to sample from N(mu, var)"""
@@ -698,3 +703,159 @@ class VariationalAutoEncoder(nn.Module):
                 break
 
         return self
+
+
+class NormalizingFlow(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        num_coupling: int = 2,
+        hidden_dim: int = 128,
+        device: str = "cpu",
+    ):
+        """
+        Initialize Normalizing Flow based on RealNVP architecture.
+
+        Args:
+            input_dim: Input dimension
+            n_components: Desired output dimension (latent space)
+            num_coupling: Number of coupling layers
+            hidden_dim: Width of hidden layers
+            device: Device to run on
+        """
+        super().__init__()
+
+        self.device = torch.device(device)
+        self.input_dim = input_dim
+        self.num_coupling = num_coupling
+
+        # Create scale and translation networks for each coupling layer
+        self.s_nets = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(
+                        input_dim // 2 if i % 2 == 0 else input_dim - input_dim // 2,
+                        hidden_dim,
+                    ),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.LeakyReLU(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.LeakyReLU(),
+                    nn.Linear(
+                        hidden_dim,
+                        input_dim - input_dim // 2 if i % 2 == 0 else input_dim // 2,
+                    ),
+                    nn.Tanh(),
+                )
+                for i in range(num_coupling)
+            ]
+        )
+
+        self.t_nets = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(
+                        input_dim // 2 if i % 2 == 0 else input_dim - input_dim // 2,
+                        hidden_dim,
+                    ),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.LeakyReLU(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.LeakyReLU(),
+                    nn.Linear(
+                        hidden_dim,
+                        input_dim - input_dim // 2 if i % 2 == 0 else input_dim // 2,
+                    ),
+                )
+                for i in range(num_coupling)
+            ]
+        )
+
+        # Learnable scaling factors for outputs of scale networks
+        self.s_scale = nn.Parameter(torch.randn(num_coupling))
+
+    def forward(self, x, inverse: bool = False):
+        """Forward pass - transform input to latent space"""
+        log_det = torch.zeros(x.shape[0]).to(self.device)
+
+        if not inverse:
+            # Forward transform
+            for i in range(self.num_coupling):
+                x, ld = self._coupling_forward(x, i)
+                log_det += ld
+            return x, log_det
+        else:
+            # Inverse transform for sampling
+            for i in reversed(range(self.num_coupling)):
+                x = self._coupling_inverse(x, i)
+            return x
+
+    def _coupling_forward(self, x, i):
+        """Single coupling layer forward transform"""
+        # Split input
+        d = self.input_dim // 2
+        x1, x2 = x[:, :d], x[:, d:]
+
+        if i % 2 == 0:
+            s = self.s_scale[i] * self.s_nets[i](x1)
+            t = self.t_nets[i](x1)
+            x2 = x2 * torch.exp(s) + t
+        else:
+            try:
+                s = self.s_scale[i] * self.s_nets[i](x2)
+            except RuntimeError:
+                breakpoint()
+            t = self.t_nets[i](x2)
+            x1 = x1 * torch.exp(s) + t
+
+        x = torch.cat([x1, x2], dim=1)
+        log_det = torch.sum(s, dim=1)
+        return x, log_det
+
+    def _coupling_inverse(self, x, i):
+        """Single coupling layer inverse transform"""
+        d = self.input_dim // 2
+        x1, x2 = x[:, :d], x[:, d:]
+
+        if i % 2 == 0:
+            s = self.s_scale[i] * self.s_nets[i](x1)
+            t = self.t_nets[i](x1)
+            x2 = (x2 - t) * torch.exp(-s)
+        else:
+            s = self.s_scale[i] * self.s_nets[i](x2)
+            t = self.t_nets[i](x2)
+            x1 = (x1 - t) * torch.exp(-s)
+
+        return torch.cat([x1, x2], dim=1)
+
+    def transform(self, X):
+        """Project data to latent space (numpy interface)"""
+        self.eval()
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            z, _ = self.forward(X_tensor, inverse=False)
+            return z.cpu().detach().numpy()
+
+    def transform_torch(self, X):
+        """Project data to latent space (torch interface)"""
+        z, _ = self.forward(X, inverse=False)
+        return z
+
+    def inverse_transform(self, Z):
+        """Reconstruct from latent space (numpy interface)"""
+        self.eval()
+        with torch.no_grad():
+            Z_tensor = torch.FloatTensor(Z).to(self.device)
+            x = self.forward(Z_tensor, inverse=True)
+            return x.cpu().detach().numpy()
+
+    def inverse_transform_torch(self, Z):
+        """Reconstruct from latent space (torch interface)"""
+        x = self.forward(Z, inverse=True)
+        return x
+
+    def reconstruction_loss(self, X_batch):
+        """Compute reconstruction loss"""
+        return 0.0
