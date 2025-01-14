@@ -181,7 +181,7 @@ def train_adapter(
 
     # training
     dicl_model.adapter_supervised_fine_tuning(
-        X_train, y_train, X_val, y_val, **training_params
+        X_train, y_train, X_val=None, y_val=None, **training_params
     )
 
     # Evaluate
