@@ -27,6 +27,7 @@ from dicl.adapters import (
     LinearAutoEncoder,
     betaVAE,
     NormalizingFlow,
+    AENormalizingFlow,
 )
 
 
@@ -36,6 +37,7 @@ ADAPTER_CLS = {
     "linearAE": LinearAutoEncoder,
     "VAE": betaVAE,
     "flow": NormalizingFlow,
+    "AEflow": AENormalizingFlow,
 }
 NOT_FULL_COMP_ADAPTERS = []
 
@@ -145,10 +147,11 @@ def main(args: Args):
                 f"{time.time() - start_time:.2f} seconds"
             )
 
-        if args.adapter and args.adapter in ADAPTER_CLS:
-            with open(
-                f"results/config/{args.dataset_name}_{args.adapter}.json", "r"
-            ) as f:
+        config_file_path = Path(
+            f"results/config/{args.dataset_name}_{args.adapter}.json"
+        )
+        if args.adapter and (args.adapter in ADAPTER_CLS) and config_file_path.exists():
+            with open(config_file_path, "r") as f:
                 adapter_config = json.load(f)
 
             # Configure adapter
@@ -157,7 +160,7 @@ def main(args: Args):
                 "device": args.device,  # Use the determined device
                 "context_length": args.context_length,
                 "forecast_horizon": args.forecast_horizon,
-                "use_revin": adapter_config["use_revin"],
+                "use_revin": args.use_revin,  # use_revin might be in config as well
             }
             if args.adapter != "flow":
                 adapter_params.update(
@@ -172,7 +175,7 @@ def main(args: Args):
                         "hidden_dim": adapter_config["hidden_dim"],
                     }
                 )
-            elif args.adapter in ["flow"]:
+            elif args.adapter in ["flow", "AEflow"]:
                 adapter_params.update(
                     {
                         "num_coupling": adapter_config["num_coupling"],
@@ -181,8 +184,12 @@ def main(args: Args):
                 )
 
             adapter = ADAPTER_CLS[args.adapter](**adapter_params).to(args.device)
+            learning_rate = adapter_config["learning_rate"]
+            batch_size = adapter_config["batch_size"]
         else:
             adapter = args.adapter
+            learning_rate = 0.001
+            batch_size = 32
 
         disentangler = adapters.MultichannelProjector(
             num_channels=n_features,
@@ -225,8 +232,8 @@ def main(args: Args):
                 y_val=y_val,
                 device=args.device,
                 log_dir=Path(log_dir) / f"n_comp_{n_components}",
-                learning_rate=adapter_config["learning_rate"],
-                batch_size=adapter_config["batch_size"],
+                learning_rate=learning_rate,
+                batch_size=batch_size,
             )
         else:
             DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
