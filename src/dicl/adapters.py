@@ -133,6 +133,15 @@ class MultichannelProjector:
                 context_length=context_length,
                 forecast_horizon=forecast_horizon,
             ).to(torch.device(device))
+        elif base_projector == "AEflow":
+            self.base_projector_ = AENormalizingFlow(
+                input_dim=self.num_channels,
+                n_components=n_components,
+                device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
+            ).to(torch.device(device))
         elif base_projector == "revin":
             self.base_projector_ = JustRevIn(
                 num_features=self.num_channels,
