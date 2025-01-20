@@ -22,10 +22,22 @@ from dicl.utils.main_script import (
     load_moirai_model,
 )
 from dicl.utils.preprocessing import get_gpu_memory_stats
+from dicl.adapters import (
+    SimpleAutoEncoder,
+    LinearAutoEncoder,
+    betaVAE,
+    NormalizingFlow,
+)
 
 
 os.environ["HF_HOME"] = "/mnt/vdb/hugguingface/"
-FULL_COMP_ADAPTERS = ["flow"]
+ADAPTER_CLS = {
+    "simpleAE": SimpleAutoEncoder,
+    "linearAE": LinearAutoEncoder,
+    "VAE": betaVAE,
+    "flow": NormalizingFlow,
+}
+NOT_FULL_COMP_ADAPTERS = []
 
 
 @dataclass
@@ -45,6 +57,8 @@ class Args:
     number_n_comp_to_try: int = 4
     inference_batch_size: int = 512
     supervised: bool = False
+    use_revin: bool = False
+    pca_in_preprocessing: bool = False
 
 
 def main(args: Args):
@@ -86,7 +100,7 @@ def main(args: Args):
         f"Preparation completed in {time.time() - start_time:.2f} seconds"
     )
 
-    start = n_features if not args.adapter or args.adapter in FULL_COMP_ADAPTERS else 1
+    start = 1 if args.adapter in NOT_FULL_COMP_ADAPTERS else n_features
     end = n_features
     number_n_comp_to_try = 1 if not args.adapter else args.number_n_comp_to_try
 
@@ -131,12 +145,54 @@ def main(args: Args):
                 f"{time.time() - start_time:.2f} seconds"
             )
 
+        if args.adapter and args.adapter in ADAPTER_CLS:
+            with open(
+                f"results/config/{args.dataset_name}_{args.adapter}.json", "r"
+            ) as f:
+                adapter_config = json.load(f)
+
+            # Configure adapter
+            adapter_params = {
+                "input_dim": n_features,
+                "device": args.device,  # Use the determined device
+                "context_length": args.context_length,
+                "forecast_horizon": args.forecast_horizon,
+                "use_revin": adapter_config["use_revin"],
+            }
+            if args.adapter != "flow":
+                adapter_params.update(
+                    {
+                        "n_components": n_components,
+                    }
+                )
+            if args.adapter in ["simpleAE", "VAE"]:
+                adapter_params.update(
+                    {
+                        "num_layers": adapter_config["num_layers"],
+                        "hidden_dim": adapter_config["hidden_dim"],
+                    }
+                )
+            elif args.adapter in ["flow"]:
+                adapter_params.update(
+                    {
+                        "num_coupling": adapter_config["num_coupling"],
+                        "hidden_dim": adapter_config["hidden_dim"],
+                    }
+                )
+
+            adapter = ADAPTER_CLS[args.adapter](**adapter_params).to(args.device)
+        else:
+            adapter = args.adapter
+
         disentangler = adapters.MultichannelProjector(
             num_channels=n_features,
             new_num_channels=n_components,
             patch_window_size=None,
-            base_projector=args.adapter,
+            base_projector=adapter,
             device=args.device,
+            use_revin=args.use_revin,
+            context_length=args.context_length,
+            forecast_horizon=args.forecast_horizon,
         )
 
         iclearner = icl_constructor(
@@ -150,6 +206,7 @@ def main(args: Args):
             iclearner=iclearner,
             n_features=n_features,
             n_components=n_components,
+            pca_in_preprocessing=args.pca_in_preprocessing,
         )
 
         logger.info(
@@ -160,6 +217,7 @@ def main(args: Args):
         if args.supervised:
             # assert not args.is_fine_tuned, "iclearner must be frozen when adapter is "
             # "(supervised) fine-tuned"
+            os.makedirs(Path(log_dir) / f"n_comp_{n_components}", exist_ok=True)
             DICL.adapter_supervised_fine_tuning(
                 X_train=X_train,
                 y_train=y_train,
@@ -167,10 +225,12 @@ def main(args: Args):
                 y_val=y_val,
                 device=args.device,
                 log_dir=Path(log_dir) / f"n_comp_{n_components}",
+                learning_rate=adapter_config["learning_rate"],
+                batch_size=adapter_config["batch_size"],
             )
         else:
             DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
-        if args.adapter:
+        if args.adapter and args.adapter not in ["pca"]:
             torch.save(
                 DICL.disentangler.base_projector_,
                 Path(log_dir) / f"n_comp_{n_components}/" / "adapter.pt",
@@ -229,6 +289,8 @@ def main(args: Args):
             args.forecast_horizon,
             args.data_path,
             is_fine_tuned="supervised" if args.supervised else args.is_fine_tuned,
+            pca_in_preprocessing=args.pca_in_preprocessing,
+            use_revin=args.use_revin,
             elapsed_time=time.time() - start_time,
             seed=args.seed,
         )
