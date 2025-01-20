@@ -21,7 +21,7 @@ from dicl.icl import iclearner as icl
 from dicl.adapters import (
     SimpleAutoEncoder,
     LinearAutoEncoder,
-    VariationalAutoEncoder,
+    betaVAE,
     NormalizingFlow,
 )
 from dicl.utils.main_script import (
@@ -33,10 +33,10 @@ from dicl.utils.main_script import (
 ADAPTER_CLS = {
     "simpleAE": SimpleAutoEncoder,
     "linearAE": LinearAutoEncoder,
-    "VAE": VariationalAutoEncoder,
+    "VAE": betaVAE,
     "flow": NormalizingFlow,
 }
-FULL_COMP_ADAPTERS = ["flow"]
+NOT_FULL_COMP_ADAPTERS = []
 
 
 @dataclass
@@ -50,33 +50,35 @@ class Args:
     adapter: str = "linearAE"
     gpu_fraction_per_worker: float = 1.0
     num_samples: int = 100
+    k_fold: int = 3
 
 
 def get_search_space(adapter_type: str) -> Dict[str, Any]:
     """Define search space for each adapter type"""
     base_space = {
-        "learning_rate": tune.choice([1e-3, 1e-2]),
-        "batch_size": tune.choice([32, 64]),
+        "learning_rate": tune.choice([1e-3]),
+        "batch_size": tune.choice([32]),
+        "use_revin": tune.choice([True, False]),
     }
 
     if adapter_type in ["simpleAE", "VAE"]:
         base_space.update(
             {
-                "num_layers": tune.choice([1, 2]),
-                "hidden_dim": tune.choice([64, 128]),
-                "coeff_reconstruction": tune.choice([0.0, 1e-2, 1e-1]),
+                "num_layers": tune.choice([1, 2, 3]),
+                "hidden_dim": tune.choice([64, 128, 256]),
+                # "coeff_reconstruction": tune.choice([0.0, 1e-2, 1e-1]),
             }
         )
-    elif adapter_type in ["linearAE"]:
+    if adapter_type in ["VAE"]:
         base_space.update(
             {
-                "coeff_reconstruction": tune.choice([0.0, 1e-2, 1e-1]),
+                "beta": tune.choice([0.5, 1, 2, 4]),
             }
         )
-    elif adapter_type in ["flow"]:
+    if adapter_type in ["flow"]:
         base_space.update(
             {
-                "num_coupling": tune.choice([1, 2]),
+                "num_coupling": tune.choice([1, 2, 3]),
                 "hidden_dim": tune.choice([64, 128, 256]),
             }
         )
@@ -93,6 +95,7 @@ def train_adapter(
     forecasting_horizon: int,
     context_length: int,
     seed: int,
+    k_folds: int,
 ):
     """Training function for Ray Tune"""
 
@@ -106,15 +109,19 @@ def train_adapter(
     X_train, y_train, X_val, y_val, X_test, y_test, n_features = prepare_data(
         dataset_name, context_length, forecasting_horizon
     )
-    time_series_val = np.concatenate([X_val, y_val], axis=-1)
+    X_train = np.concatenate([X_train, X_val], axis=0)
+    y_train = np.concatenate([y_train, y_val], axis=0)
     time_series_test = np.concatenate([X_test, y_test], axis=-1)
 
     # Configure adapter
     adapter_params = {
         "input_dim": n_features,
         "device": device,  # Use the determined device
+        "context_length": context_length,
+        "forecast_horizon": forecasting_horizon,
+        "use_revin": config["use_revin"],
     }
-    if adapter_type not in FULL_COMP_ADAPTERS:
+    if adapter_type != "flow":
         adapter_params.update(
             {
                 "n_components": n_components,
@@ -162,35 +169,79 @@ def train_adapter(
         n_features=n_components,
         forecast_horizon=forecasting_horizon,
     )
-    # adapter
-    adapter = adapter_cls(**adapter_params).to(device)
-    disentangler = adapters.MultichannelProjector(
-        num_channels=n_features,
-        new_num_channels=n_components,
-        patch_window_size=None,
-        base_projector=adapter,
-        device=device,
-    )
-    # dicl
-    dicl_model = DICL(
-        disentangler=disentangler,
-        iclearner=iclearner,
-        n_features=n_features,
-        n_components=n_components,
-    )
 
-    # training
-    dicl_model.adapter_supervised_fine_tuning(
-        X_train, y_train, X_val=None, y_val=None, **training_params
-    )
+    # Implement k-fold cross validation
+    fold_metrics = []
 
-    # Evaluate
-    with torch.no_grad():
-        _, _, _, _ = dicl_model.predict_multi_step(
-            X=time_series_val,
-            prediction_horizon=forecasting_horizon,
+    # Create folds from training data
+    dataset_size = len(X_train)
+    fold_size = dataset_size // (k_folds)  # k_folds+1 for rolling k-fold
+
+    for fold in range(k_folds):
+        # Time series cross-validation
+        # For fold i, train on folds [0:i] and validate on fold [i+1]
+
+        # Rolling k-fold Cross Validation
+        # train_end = (fold + 1) * fold_size
+        # X_fold_train = X_train[:train_end]
+        # y_fold_train = y_train[:train_end]
+        # X_fold_val = X_train[train_end:]
+        # y_fold_val = y_train[train_end:]
+
+        # Standard k-fold Cross Validation
+        # Calculate start and end indices for validation fold
+        val_start = fold * fold_size
+        val_end = (fold + 1) * fold_size
+
+        # Create validation fold
+        X_fold_val = X_train[val_start:val_end]
+        y_fold_val = y_train[val_start:val_end]
+
+        # Create training fold from remaining data
+        X_fold_train = np.concatenate([X_train[:val_start], X_train[val_end:]], axis=0)
+        y_fold_train = np.concatenate([y_train[:val_start], y_train[val_end:]], axis=0)
+
+        # Reset model for each fold
+        adapter = adapter_cls(**adapter_params).to(device)
+        disentangler = adapters.MultichannelProjector(
+            num_channels=n_features,
+            new_num_channels=n_components,
+            patch_window_size=None,
+            base_projector=adapter,
+            device=device,
         )
-        metrics = dicl_model.compute_metrics()
+        dicl_model = DICL(
+            disentangler=disentangler,
+            iclearner=iclearner,
+            n_features=n_features,
+            n_components=n_components,
+        )
+
+        # Train on this fold
+        dicl_model.adapter_supervised_fine_tuning(
+            X_fold_train,
+            y_fold_train,
+            X_val=X_fold_val,
+            y_val=y_fold_val,
+            **training_params,
+        )
+
+        # Evaluate on validation fold
+        with torch.no_grad():
+            fold_time_series = np.concatenate([X_fold_val, y_fold_val], axis=-1)
+            _, _, _, _ = dicl_model.predict_multi_step(
+                X=fold_time_series,
+                prediction_horizon=forecasting_horizon,
+            )
+            fold_metrics.append(dicl_model.compute_metrics())
+
+    # Calculate average metrics across folds
+    metrics = {}
+    for key in fold_metrics[0].keys():
+        metrics[key] = np.mean([fm[key] for fm in fold_metrics])
+
+    # Final evaluation on test set using the last model
+    with torch.no_grad():
         _, _, _, _ = dicl_model.predict_multi_step(
             X=time_series_test,
             prediction_horizon=forecasting_horizon,
@@ -228,6 +279,7 @@ def optimize_adapter(
     num_samples: int,
     gpu_fraction_per_worker: float,
     seed: int = 13,
+    k_fold: int = 3,
 ):
     """Run hyperparameter optimization using Ray Tune with HEBO"""
 
@@ -269,6 +321,7 @@ def optimize_adapter(
             forecasting_horizon,
             context_length,
             seed,
+            k_fold,
         )
 
     # Set up tuner with scheduler and resources per trial
@@ -321,7 +374,7 @@ if __name__ == "__main__":
     )
 
     # n_components
-    if args.adapter in FULL_COMP_ADAPTERS:
+    if args.adapter not in NOT_FULL_COMP_ADAPTERS:
         possible_n_components = np.array([n_features])
     else:
         possible_n_components = np.linspace(
@@ -340,6 +393,7 @@ if __name__ == "__main__":
             num_samples=args.num_samples,
             gpu_fraction_per_worker=args.gpu_fraction_per_worker,
             seed=args.seed,
+            k_fold=args.k_fold,
         )
         print(f"Best config for {args.adapter} with n_comp {n_components}:")
         print(best_config)
