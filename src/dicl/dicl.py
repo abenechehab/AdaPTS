@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, List, Optional, Tuple
 import copy
+import os
 
 import numpy as np
 from numpy.typing import NDArray
@@ -11,7 +12,7 @@ import torch
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import make_pipeline
 
-from dicl.utils.preprocessing import AxisScaler, get_gpu_memory_stats
+from dicl.utils.preprocessing import AxisScaler, AxisPCA, get_gpu_memory_stats
 
 if TYPE_CHECKING:
     from dicl.icl.iclearner import ICLTrainer, ICLObject
@@ -26,6 +27,7 @@ class DICL:
         iclearner: "ICLTrainer",
         n_features: int,
         n_components: int,
+        pca_in_preprocessing: bool = False,
     ):
         """
         Initialize the DICL model with the specified disentangler, model, and
@@ -47,10 +49,17 @@ class DICL:
         self.n_features = n_features
         self.n_components = n_components
 
-        self.scaler = make_pipeline(
-            AxisScaler(MinMaxScaler(), axis=1),
-            AxisScaler(StandardScaler(), axis=1),
-        )
+        if pca_in_preprocessing:
+            self.scaler = make_pipeline(
+                AxisScaler(MinMaxScaler(), axis=1),
+                AxisScaler(StandardScaler(), axis=1),
+                AxisPCA(n_components=n_features, axis=1),
+            )
+        else:
+            self.scaler = make_pipeline(
+                AxisScaler(MinMaxScaler(), axis=1),
+                AxisScaler(StandardScaler(), axis=1),
+            )
 
         # self.disentangler = make_pipeline(self.scaler, disentangler)
         self.disentangler = disentangler
@@ -300,11 +309,15 @@ class DICL:
         coeff_reconstruction=0.0,
         n_epochs=300,
         learning_rate=0.001,
-        batch_size=16,
+        batch_size=32,
         early_stopping_patience=10,
         device="cpu",
         log_dir="logs/",
+        reverse=False,
     ):
+        if not os.path.exists(log_dir):
+            raise ValueError(f"Log directory {log_dir} does not exist")
+
         writer = SummaryWriter(log_dir)
 
         assert isinstance(
@@ -403,17 +416,31 @@ class DICL:
                 predictions = make_predictions(X_batch=X_batch, y_batch=y_batch)
 
                 criterion = torch.nn.MSELoss()
-                loss = criterion(predictions, y_batch)
+                pred_loss = criterion(predictions, y_batch)
 
-                # reconstruction loss
-                reconstruction_loss = (
-                    self.disentangler.base_projector_.reconstruction_loss(
-                        X_batch.permute(0, 2, 1).reshape(-1, X_batch.shape[1])
+                loss = pred_loss
+                if coeff_reconstruction > 0:
+                    # reconstruction loss
+                    reconstruction_loss = (
+                        self.disentangler.base_projector_.reconstruction_loss(
+                            X_batch.permute(0, 2, 1).reshape(-1, X_batch.shape[1])
+                        )
                     )
-                )
-                loss += coeff_reconstruction * reconstruction_loss
+                    loss += coeff_reconstruction * reconstruction_loss
+
+                if reverse:
+                    loss = -loss
 
                 loss.backward()
+                # Log gradient norm of model parameters
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.disentangler.base_projector_.parameters(), float("inf")
+                )
+                writer.add_scalar(
+                    "Gradients/norm",
+                    grad_norm.item(),
+                    epoch * len(train_loader) + batch_idx,
+                )
                 optimizer.step()
 
                 total_loss += loss.item()
@@ -421,6 +448,17 @@ class DICL:
                 # Log batch loss
                 writer.add_scalar(
                     "Loss/batch", loss.item(), epoch * len(train_loader) + batch_idx
+                )
+                if coeff_reconstruction > 0:
+                    writer.add_scalar(
+                        "Loss/batch_recon",
+                        reconstruction_loss.item(),
+                        epoch * len(train_loader) + batch_idx,
+                    )
+                writer.add_scalar(
+                    "Loss/batch_pred",
+                    pred_loss.item(),
+                    epoch * len(train_loader) + batch_idx,
                 )
 
             avg_loss = total_loss * batch_size / len(train_dataset)
@@ -439,6 +477,8 @@ class DICL:
                     val_predictions = make_predictions(X_batch=X_val, y_batch=y_val)
                     val_loss += criterion(val_predictions, y_val).item()
             val_loss = val_loss * batch_size / val_size
+            if reverse:
+                val_loss = -val_loss
 
             # Log validation loss
             writer.add_scalar("Loss/validation", val_loss, epoch)
