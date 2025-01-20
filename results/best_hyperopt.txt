@@ -1,0 +1,9 @@
+Illness, 24
+Best config for VAE with n_comp 7:
+{'learning_rate': 0.001, 'batch_size': 32, 'use_revin': True, 'num_layers': 2, 'hidden_dim': 128, 'beta': 0.5}
+Best config for flow with n_comp 7:
+{'learning_rate': 0.001, 'batch_size': 32, 'use_revin': True, 'num_coupling': 1, 'hidden_dim': 256}
+
+ETTh1, 96
+Best config for VAE with n_comp 7:
+{'learning_rate': 0.001, 'batch_size': 32, 'use_revin': True, 'num_layers': 1, 'hidden_dim': 64, 'beta': 0.5}
