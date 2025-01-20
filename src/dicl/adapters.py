@@ -11,6 +11,8 @@ from sklearn.random_projection import SparseRandomProjection
 import torch
 import torch.nn as nn
 
+from dicl.utils.preprocessing import RevIN
+
 
 class IdentityTransformer(BaseEstimator, TransformerMixin):
     def __init__(self):
@@ -78,6 +80,9 @@ class MultichannelProjector:
         patch_window_size: Optional[int] = None,
         base_projector: Optional[Union[str, Any]] = None,
         device: str = "cpu",
+        use_revin: bool = False,
+        context_length: int = 512,
+        forecast_horizon: int = 96,
     ):
         # init dimensions
         self.num_channels = num_channels
@@ -95,27 +100,44 @@ class MultichannelProjector:
             self.base_projector_ = TruncatedSVD(n_components=n_components)
         elif base_projector == "rand":
             self.base_projector_ = SparseRandomProjection(n_components=n_components)
-        elif base_projector == "simpleAE":
-            self.base_projector_ = SimpleAutoEncoder(
-                n_components=n_components,
-                input_dim=self.num_channels,
-                device=device,
-            ).to(torch.device(device))
         elif base_projector == "linearAE":
             self.base_projector_ = LinearAutoEncoder(
                 n_components=n_components,
                 input_dim=self.num_channels,
                 device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
             ).to(torch.device(device))
-        elif base_projector == "VAE":
-            self.base_projector_ = VariationalAutoEncoder(
+        elif base_projector == "simpleAE":
+            self.base_projector_ = SimpleAutoEncoder(
                 n_components=n_components,
                 input_dim=self.num_channels,
                 device=device,
+                use_revin=use_revin,
+            ).to(torch.device(device))
+        elif base_projector == "VAE":
+            self.base_projector_ = betaVAE(
+                n_components=n_components,
+                input_dim=self.num_channels,
+                device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
             ).to(torch.device(device))
         elif base_projector == "flow":
             self.base_projector_ = NormalizingFlow(
                 input_dim=self.num_channels,
+                device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
+            ).to(torch.device(device))
+        elif base_projector == "revin":
+            self.base_projector_ = JustRevIn(
+                num_features=self.num_channels,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
                 device=device,
             ).to(torch.device(device))
         # you can give your own base_projector with fit() and transform() methods, and
@@ -134,6 +156,7 @@ class MultichannelProjector:
         X_2d = X_transposed.reshape(
             num_samples * num_patches, self.patch_window_size_ * num_channels
         )
+
         return self.base_projector_.fit(X_2d)
 
     def transform(self, X, y: Optional[NDArray] = None):
@@ -233,7 +256,10 @@ class LinearAutoEncoder(nn.Module):
         self,
         input_dim: int,
         n_components: int,
+        context_length: int,
+        forecast_horizon: int,
         device: str = "cpu",
+        use_revin: bool = False,
     ):
         """
         Initialize AutoEncoder for feature space projection.
@@ -246,6 +272,11 @@ class LinearAutoEncoder(nn.Module):
         """
         super().__init__()
 
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+        self.input_dim = input_dim
+        self.n_components = n_components
+
         self.device = torch.device(device)
 
         # Build encoder layers
@@ -256,8 +287,25 @@ class LinearAutoEncoder(nn.Module):
         self.decoder = nn.Sequential()
         self.decoder.add_module("layer0", nn.Linear(n_components, input_dim))
 
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
     def forward(self, x):
         """Forward pass through autoencoder"""
+        if self.use_revin:
+            revin_input = x.reshape(-1, self.context_length, self.input_dim)
+            after_encoding = self.encoder(
+                self.revin(revin_input, mode="norm").reshape(-1, self.n_components)
+            )
+            after_decoding = self.decoder(after_encoding)
+            reverse_revin_input = after_decoding.reshape(
+                -1, self.context_length, self.input_dim
+            )
+            return self.revin(
+                reverse_revin_input,
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
         return self.decoder(self.encoder(x))
 
     def fit(
@@ -344,27 +392,54 @@ class LinearAutoEncoder(nn.Module):
         """Project data to latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                X_tensor = self.revin(
+                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    mode="norm",
+                ).reshape(-1, self.n_components)
             return self.encoder(X_tensor).cpu().detach().numpy()
 
     def transform_torch(self, X):
         """Project data to latent space"""
+        if self.use_revin:
+            X = self.revin(
+                X.reshape(-1, self.context_length, self.input_dim), mode="norm"
+            ).reshape(-1, self.n_components)
         return self.encoder(X)
 
     def inverse_transform(self, X):
         """Reconstruct from latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                return (
+                    self.revin(
+                        self.decoder(X_tensor).reshape(
+                            -1, self.forecast_horizon, self.input_dim
+                        ),
+                        mode="denorm",
+                    )
+                    .cpu()
+                    .detach()
+                    .numpy()
+                    .reshape(-1, self.input_dim)
+                )
             return self.decoder(X_tensor).cpu().detach().numpy()
 
     def inverse_transform_torch(self, X):
         """Reconstruct from latent space"""
+        if self.use_revin:
+            return self.revin(
+                self.decoder(X).reshape(-1, self.forecast_horizon, self.input_dim),
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
         return self.decoder(X)
 
     def reconstruction_loss(self, X_batch):
         """Compute reconstruction loss"""
         X_batch = X_batch.to(self.device)
         X_reconstructed = self(X_batch)
-        return nn.MSELoss()(X_reconstructed, X_batch).item()
+        return nn.MSELoss()(X_reconstructed, X_batch)
 
 
 class SimpleAutoEncoder(nn.Module):
@@ -375,6 +450,7 @@ class SimpleAutoEncoder(nn.Module):
         num_layers: int = 2,
         hidden_dim: int = 128,
         device: str = "cpu",
+        use_revin: bool = False,
     ):
         """
         Initialize AutoEncoder for feature space projection.
@@ -417,8 +493,16 @@ class SimpleAutoEncoder(nn.Module):
         )
         self.decoder.add_module(f"layer{num_layers+1}-act", nn.Tanh())
 
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
     def forward(self, x):
         """Forward pass through autoencoder"""
+        if self.use_revin:
+            return self.revin(
+                self.decoder(self.encoder(self.revin(x, mode="norm"))), mode="denorm"
+            )
         return self.decoder(self.encoder(x))
 
     def fit(
@@ -505,10 +589,14 @@ class SimpleAutoEncoder(nn.Module):
         """Project data to latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                X_tensor = self.revin(X_tensor, mode="norm")
             return self.encoder(X_tensor).cpu().detach().numpy()
 
     def transform_torch(self, X):
         """Project data to latent space"""
+        if self.use_revin:
+            X = self.revin(X, mode="norm")
         return self.encoder(X)
 
     def inverse_transform(self, X):
@@ -524,17 +612,21 @@ class SimpleAutoEncoder(nn.Module):
     def reconstruction_loss(self, X_batch):
         """Compute reconstruction loss"""
         X_reconstructed = self(X_batch)
-        return nn.MSELoss()(X_reconstructed, X_batch).item()
+        return nn.MSELoss()(X_reconstructed, X_batch)
 
 
-class VariationalAutoEncoder(nn.Module):
+class betaVAE(nn.Module):
     def __init__(
         self,
         input_dim: int,
         n_components: int,
+        context_length: int,
+        forecast_horizon: int,
         num_layers: int = 1,
-        hidden_dim: int = 128,
+        hidden_dim: int = 64,
+        beta: float = 0.5,
         device: str = "cpu",
+        use_revin: bool = False,
     ):
         """
         Initialize Variational AutoEncoder for feature space projection.
@@ -548,6 +640,11 @@ class VariationalAutoEncoder(nn.Module):
         super().__init__()
 
         self.device = torch.device(device)
+        self.beta = beta
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+        self.n_components = n_components
+        self.input_dim = input_dim
 
         # Build encoder layers
         self.encoder = nn.Sequential()
@@ -577,6 +674,10 @@ class VariationalAutoEncoder(nn.Module):
         self.latent_mu = nn.Linear(hidden_dim, n_components)
         self.latent_logvar = nn.Linear(hidden_dim, n_components)
 
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
     def reparameterize(self, mu, logvar):
         """Reparameterization trick to sample from N(mu, var)"""
         std = torch.exp(0.5 * logvar)
@@ -585,6 +686,24 @@ class VariationalAutoEncoder(nn.Module):
 
     def forward(self, x):
         """Forward pass through autoencoder"""
+        if self.use_revin:
+            revin_input = x.reshape(-1, self.context_length, self.input_dim)
+            after_encoding = self.encoder(
+                self.revin(revin_input, mode="norm").reshape(-1, self.n_components)
+            )
+            mu, logvar = (
+                self.latent_mu(after_encoding),
+                self.latent_logvar(after_encoding),
+            )
+            z = self.reparameterize(mu, logvar)
+            after_decoding = self.decoder(z)
+            reverse_revin_input = after_decoding.reshape(
+                -1, self.context_length, self.input_dim
+            )
+            return self.revin(
+                reverse_revin_input,
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
         encoding = self.encoder(x)
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         z = self.reparameterize(mu, logvar)
@@ -594,12 +713,21 @@ class VariationalAutoEncoder(nn.Module):
         """Project data to latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                X_tensor = self.revin(
+                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    mode="norm",
+                ).reshape(-1, self.n_components)
             encoding = self.encoder(X_tensor)
             mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
             return self.reparameterize(mu, logvar).cpu().detach().numpy()
 
     def transform_torch(self, X):
         """Project data to latent space"""
+        if self.use_revin:
+            X = self.revin(
+                X.reshape(-1, self.context_length, self.input_dim), mode="norm"
+            ).reshape(-1, self.n_components)
         encoding = self.encoder(X)
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         return self.reparameterize(mu, logvar)
@@ -608,21 +736,63 @@ class VariationalAutoEncoder(nn.Module):
         """Reconstruct from latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                return (
+                    self.revin(
+                        self.decoder(X_tensor).reshape(
+                            -1, self.forecast_horizon, self.input_dim
+                        ),
+                        mode="denorm",
+                    )
+                    .cpu()
+                    .detach()
+                    .numpy()
+                    .reshape(-1, self.input_dim)
+                )
             return self.decoder(X_tensor).cpu().detach().numpy()
 
     def inverse_transform_torch(self, X):
         """Reconstruct from latent space"""
+        if self.use_revin:
+            return self.revin(
+                self.decoder(X).reshape(-1, self.forecast_horizon, self.input_dim),
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
         return self.decoder(X)
 
     def reconstruction_loss(self, X_batch):
         """Compute reconstruction loss"""
         X_batch = X_batch.to(self.device)
+        if self.use_revin:
+            X_batch = self.revin(
+                X_batch.reshape(-1, self.context_length, self.input_dim),
+                mode="norm",
+            ).reshape(-1, self.n_components)
         encoding = self.encoder(X_batch)
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         z = self.reparameterize(mu, logvar)
-        reconstruction_loss = nn.MSELoss()(self.decoder(z), X_batch).item()
+        after_decoding = self.decoder(z)
+        if self.use_revin:
+            after_decoding = self.revin(
+                after_decoding.reshape(-1, self.forecast_horizon, self.input_dim),
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        reconstruction_loss = nn.MSELoss()(after_decoding, X_batch)
         kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-        return reconstruction_loss + kl_loss
+        return reconstruction_loss + self.beta * kl_loss
+
+    def kl_loss(self, X_batch):
+        """Compute KL loss"""
+        X_batch = X_batch.to(self.device)
+        if self.use_revin:
+            X_batch = self.revin(
+                X_batch.reshape(-1, self.context_length, self.input_dim),
+                mode="norm",
+            ).reshape(-1, self.n_components)
+        encoding = self.encoder(X_batch)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        return self.beta * kl_loss
 
     def fit(
         self,
@@ -709,9 +879,12 @@ class NormalizingFlow(nn.Module):
     def __init__(
         self,
         input_dim: int,
-        num_coupling: int = 2,
-        hidden_dim: int = 128,
+        context_length: int,
+        forecast_horizon: int,
+        num_coupling: int = 1,
+        hidden_dim: int = 256,
         device: str = "cpu",
+        use_revin: bool = False,
     ):
         """
         Initialize Normalizing Flow based on RealNVP architecture.
@@ -728,6 +901,8 @@ class NormalizingFlow(nn.Module):
         self.device = torch.device(device)
         self.input_dim = input_dim
         self.num_coupling = num_coupling
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
 
         # Create scale and translation networks for each coupling layer
         self.s_nets = nn.ModuleList(
@@ -776,12 +951,20 @@ class NormalizingFlow(nn.Module):
         # Learnable scaling factors for outputs of scale networks
         self.s_scale = nn.Parameter(torch.randn(num_coupling))
 
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
     def forward(self, x, inverse: bool = False):
         """Forward pass - transform input to latent space"""
         log_det = torch.zeros(x.shape[0]).to(self.device)
 
         if not inverse:
             # Forward transform
+            if self.use_revin:
+                x = self.revin(
+                    x.reshape(-1, self.context_length, self.input_dim), mode="norm"
+                ).reshape(-1, self.input_dim)
             for i in range(self.num_coupling):
                 x, ld = self._coupling_forward(x, i)
                 log_det += ld
@@ -790,6 +973,10 @@ class NormalizingFlow(nn.Module):
             # Inverse transform for sampling
             for i in reversed(range(self.num_coupling)):
                 x = self._coupling_inverse(x, i)
+            if self.use_revin:
+                x = self.revin(
+                    x.reshape(-1, self.forecast_horizon, self.input_dim), mode="denorm"
+                ).reshape(-1, self.input_dim)
             return x
 
     def _coupling_forward(self, x, i):
@@ -858,4 +1045,257 @@ class NormalizingFlow(nn.Module):
 
     def reconstruction_loss(self, X_batch):
         """Compute reconstruction loss"""
-        return 0.0
+        return torch.tensor(0.0, device=self.device)
+
+
+class AENormalizingFlow(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        n_components: int,
+        context_length: int,
+        forecast_horizon: int,
+        num_coupling: int = 1,
+        hidden_dim: int = 256,
+        device: str = "cpu",
+        use_revin: bool = False,
+    ):
+        """
+        Initialize Normalizing Flow based on RealNVP architecture.
+
+        Args:
+            input_dim: Input dimension
+            n_components: Desired output dimension (latent space)
+            num_coupling: Number of coupling layers
+            hidden_dim: Width of hidden layers
+            device: Device to run on
+        """
+        super().__init__()
+
+        self.device = torch.device(device)
+        self.input_dim = input_dim
+        self.num_coupling = num_coupling
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+        self.n_components = n_components
+
+        # Linear encoder to map into a low-dimensional space
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, n_components),
+        )
+        # Linear decoder to map back to the original space
+        self.decoder = nn.Sequential(
+            nn.Linear(n_components, input_dim),
+        )
+
+        # Create scale and translation networks for each coupling layer
+        self.s_nets = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(
+                        n_components // 2
+                        if i % 2 == 0
+                        else n_components - n_components // 2,
+                        hidden_dim,
+                    ),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.LeakyReLU(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.LeakyReLU(),
+                    nn.Linear(
+                        hidden_dim,
+                        n_components - n_components // 2
+                        if i % 2 == 0
+                        else n_components // 2,
+                    ),
+                    nn.Tanh(),
+                )
+                for i in range(num_coupling)
+            ]
+        )
+
+        self.t_nets = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(
+                        n_components // 2
+                        if i % 2 == 0
+                        else n_components - n_components // 2,
+                        hidden_dim,
+                    ),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.LeakyReLU(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.LeakyReLU(),
+                    nn.Linear(
+                        hidden_dim,
+                        n_components - n_components // 2
+                        if i % 2 == 0
+                        else n_components // 2,
+                    ),
+                )
+                for i in range(num_coupling)
+            ]
+        )
+
+        # Learnable scaling factors for outputs of scale networks
+        self.s_scale = nn.Parameter(torch.randn(num_coupling))
+
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
+    def forward(self, x, inverse: bool = False):
+        """Forward pass - transform input to latent space"""
+        log_det = torch.zeros(x.shape[0]).to(self.device)
+
+        if not inverse:
+            # Forward transform
+            if self.use_revin:
+                x = self.revin(
+                    x.reshape(-1, self.context_length, self.input_dim), mode="norm"
+                ).reshape(-1, self.input_dim)
+                x = self.encoder(x)
+            for i in range(self.num_coupling):
+                x, ld = self._coupling_forward(x, i)
+                log_det += ld
+            return x, log_det
+        else:
+            # Inverse transform for sampling
+            for i in reversed(range(self.num_coupling)):
+                x = self._coupling_inverse(x, i)
+            if self.use_revin:
+                x = self.decoder(x)
+                x = self.revin(
+                    x.reshape(-1, self.forecast_horizon, self.input_dim), mode="denorm"
+                ).reshape(-1, self.input_dim)
+            return x
+
+    def _coupling_forward(self, x, i):
+        """Single coupling layer forward transform"""
+        # Split input
+        d = self.input_dim // 2
+        x1, x2 = x[:, :d], x[:, d:]
+
+        if i % 2 == 0:
+            s = self.s_scale[i] * self.s_nets[i](x1)
+            t = self.t_nets[i](x1)
+            x2 = x2 * torch.exp(s) + t
+        else:
+            try:
+                s = self.s_scale[i] * self.s_nets[i](x2)
+            except RuntimeError:
+                breakpoint()
+            t = self.t_nets[i](x2)
+            x1 = x1 * torch.exp(s) + t
+
+        x = torch.cat([x1, x2], dim=1)
+        log_det = torch.sum(s, dim=1)
+        return x, log_det
+
+    def _coupling_inverse(self, x, i):
+        """Single coupling layer inverse transform"""
+        d = self.input_dim // 2
+        x1, x2 = x[:, :d], x[:, d:]
+
+        if i % 2 == 0:
+            s = self.s_scale[i] * self.s_nets[i](x1)
+            t = self.t_nets[i](x1)
+            x2 = (x2 - t) * torch.exp(-s)
+        else:
+            s = self.s_scale[i] * self.s_nets[i](x2)
+            t = self.t_nets[i](x2)
+            x1 = (x1 - t) * torch.exp(-s)
+
+        return torch.cat([x1, x2], dim=1)
+
+    def transform(self, X):
+        """Project data to latent space (numpy interface)"""
+        self.eval()
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            z, _ = self.forward(X_tensor, inverse=False)
+            return z.cpu().detach().numpy()
+
+    def transform_torch(self, X):
+        """Project data to latent space (torch interface)"""
+        z, _ = self.forward(X, inverse=False)
+        return z
+
+    def inverse_transform(self, Z):
+        """Reconstruct from latent space (numpy interface)"""
+        self.eval()
+        with torch.no_grad():
+            Z_tensor = torch.FloatTensor(Z).to(self.device)
+            x = self.forward(Z_tensor, inverse=True)
+            return x.cpu().detach().numpy()
+
+    def inverse_transform_torch(self, Z):
+        """Reconstruct from latent space (torch interface)"""
+        x = self.forward(Z, inverse=True)
+        return x
+
+    def reconstruction_loss(self, X_batch):
+        """Compute reconstruction loss"""
+        return torch.tensor(0.0, device=self.device)
+
+
+class JustRevIn(nn.Module):
+    def __init__(
+        self,
+        num_features: int,
+        context_length: int,
+        forecast_horizon: int,
+        device: str = "cpu",
+    ):
+        super().__init__()
+        self.device = torch.device(device)
+        self.num_features = num_features
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+
+        self.revin = RevIN(num_features=num_features)
+
+    def forward(self, x, mode: str):
+        if mode == "norm":
+            return self.revin(
+                x.reshape(-1, self.context_length, self.num_features), mode="norm"
+            ).reshape(-1, self.num_features)
+        elif mode == "denorm":
+            return self.revin(
+                x.reshape(-1, self.forecast_horizon, self.num_features), mode="denorm"
+            ).reshape(-1, self.num_features)
+        else:
+            raise ValueError("Invalid mode. Must be 'norm' or 'denorm'")
+
+    def transform(self, X):
+        """Project data to latent space (numpy interface)"""
+        self.eval()
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            z = self.forward(X_tensor, mode="norm")
+            return z.cpu().detach().numpy()
+
+    def transform_torch(self, X):
+        """Project data to latent space (torch interface)"""
+        z = self.forward(X, mode="norm")
+        return z
+
+    def inverse_transform(self, Z):
+        """Reconstruct from latent space (numpy interface)"""
+        self.eval()
+        with torch.no_grad():
+            Z_tensor = torch.FloatTensor(Z).to(self.device)
+            x = self.forward(Z_tensor, mode="denorm")
+            return x.cpu().detach().numpy()
+
+    def inverse_transform_torch(self, Z):
+        """Reconstruct from latent space (torch interface)"""
+        x = self.forward(Z, mode="denorm")
+        return x
+
+    def reconstruction_loss(self, X_batch):
+        """Compute reconstruction loss"""
+        return torch.tensor(0.0, device=self.device)
