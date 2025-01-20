@@ -627,12 +627,19 @@ class MoiraiICLTrainer(ICLTrainer):
 
     def compute_statistics(self):
         """Compute statistics on predictions"""
+        for dim in range(self.n_features):
+            # MOMENT provides point estimates, so mean=mode=prediction, sigma=0
+            preds = self.icl_object[dim].predictions
+            self.icl_object[dim].mean_arr = preds.cpu().detach().numpy()
+            self.icl_object[dim].mode_arr = preds.cpu().detach().numpy()
+            self.icl_object[dim].sigma_arr = np.zeros_like(preds.cpu().detach().numpy())
         return self.icl_object
 
     def predict_long_horizon(
         self,
         prediction_horizon: int,
         batch_size: int = 1024,
+        verbose: int = 1,
     ):
         """Multi-step prediction using Moirai model"""
         self.model.eval()
@@ -640,7 +647,8 @@ class MoiraiICLTrainer(ICLTrainer):
         device = next(self.model.parameters()).device
         for dim in range(self.n_features):
             ts = self.icl_object[dim].time_series
-            tensor_ts = torch.from_numpy(ts).float().to(device)
+            tensor_ts = ts if isinstance(ts, torch.Tensor) else torch.from_numpy(ts)
+            tensor_ts = tensor_ts.float().to(device)
             # Time series values. Shape: (batch, time, variate)
             tensor_ts = tensor_ts.reshape((self.batch_size, self.context_length, 1))
             # Process in batches to avoid memory issues
@@ -649,37 +657,17 @@ class MoiraiICLTrainer(ICLTrainer):
                 batch_end = min(i + batch_size, self.batch_size)
                 batch_ts = tensor_ts[i:batch_end]
 
-                batch_predictions = (
-                    self.model(
-                        past_target=batch_ts,
-                        past_observed_target=torch.ones_like(
-                            batch_ts, dtype=torch.bool
-                        ),
-                        past_is_pad=torch.zeros_like(
-                            batch_ts, dtype=torch.bool
-                        ).squeeze(-1),
-                    )
-                    .cpu()
-                    .detach()
-                    .numpy()
+                batch_predictions = self.model(
+                    past_target=batch_ts,
+                    past_observed_target=torch.ones_like(batch_ts, dtype=torch.bool),
+                    past_is_pad=torch.zeros_like(batch_ts, dtype=torch.bool).squeeze(
+                        -1
+                    ),
                 )
                 all_predictions.append(batch_predictions)
 
-            # Stack all batches together
-            predictions = np.concatenate(all_predictions, axis=0)
-
-            # expand_dims to make it (batch, variate=1, time)
-            self.icl_object[dim].predictions = np.expand_dims(
-                np.round(np.mean(predictions, axis=1), decimals=4), axis=1
-            )
-            self.icl_object[dim].mean_arr = np.expand_dims(
-                np.round(np.mean(predictions, axis=1), decimals=4), axis=1
-            )
-            self.icl_object[dim].mode_arr = copy.copy(self.icl_object[dim].mean_arr)
-            self.icl_object[dim].sigma_arr = np.expand_dims(
-                np.round(np.std(predictions, axis=1), decimals=4), axis=1
-            )
-
+            predictions = torch.concat(all_predictions, axis=0)
+            self.icl_object[dim].predictions = predictions
         return self.compute_statistics()
 
 
