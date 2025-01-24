@@ -653,7 +653,10 @@ class MoiraiICLTrainer(ICLTrainer):
             tensor_ts = tensor_ts.reshape((self.batch_size, self.context_length, 1))
             # Process in batches to avoid memory issues
             all_predictions = []
-            for i in tqdm(range(0, self.batch_size, batch_size), desc="batch"):
+            for i in tqdm(
+                range(0, self.batch_size, batch_size),
+                desc="inference batch"
+            ):
                 batch_end = min(i + batch_size, self.batch_size)
                 batch_ts = tensor_ts[i:batch_end]
 
