@@ -216,6 +216,7 @@ def save_metrics_to_csv(
     use_revin,
     elapsed_time,
     seed,
+    train_size,
 ):
     columns = [
         "dataset",
@@ -232,6 +233,7 @@ def save_metrics_to_csv(
         "seed",
         "metric",
         "value",
+        "train_size",
     ]
 
     data_row = [
@@ -256,7 +258,7 @@ def save_metrics_to_csv(
         if not file_exists:
             writer.writerow(columns)
         for metric, value in metrics.items():
-            row = data_row + [metric, value]
+            row = data_row + [metric, value] + [train_size]
             writer.writerow(row)
 
 
@@ -323,7 +325,7 @@ def setup_logging(
     # Create log filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = os.path.join(
-        log_dir, f"{timestamp}_{dataset_name}_{adapter}_{model_name}"
+        log_dir, dataset_name, f"{timestamp}_{dataset_name}_{adapter}_{model_name}"
     )
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f"run_{timestamp}.log")
