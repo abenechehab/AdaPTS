@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, List, Optional, Tuple
 import copy
 import os
+from tqdm import tqdm
 
 import numpy as np
 from numpy.typing import NDArray
@@ -314,6 +315,7 @@ class DICL:
         device="cpu",
         log_dir="logs/",
         reverse=False,
+        verbose=0,
     ):
         if not os.path.exists(log_dir):
             raise ValueError(f"Log directory {log_dir} does not exist")
@@ -398,7 +400,11 @@ class DICL:
         # Track best validation loss for early stopping
         best_val_loss = float("inf")
 
-        for epoch in range(n_epochs):
+        for epoch in tqdm(
+            range(n_epochs),
+            desc="Training Epochs",
+            disable=not bool(verbose),
+        ):
             # log gpu memory
             gpu_stats = get_gpu_memory_stats()
             for key, value in gpu_stats.items():
@@ -487,6 +493,7 @@ class DICL:
             scheduler.step(val_loss)
 
             # Early stopping check
+            patience_counter = 0
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 patience_counter = 0
