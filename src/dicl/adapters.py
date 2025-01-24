@@ -401,8 +401,9 @@ class LinearAutoEncoder(nn.Module):
             self.train()
             epoch_train_loss = 0
             for batch_x, batch_y in train_loader:
-                batch_x, batch_y = batch_x.reshape(-1, self.input_dim), batch_y.reshape(
-                    -1, self.input_dim
+                batch_x, batch_y = (
+                    batch_x.reshape(-1, self.input_dim),
+                    batch_y.reshape(-1, self.input_dim),
                 )
                 output = self(batch_x)
                 train_loss = criterion(output, batch_y)

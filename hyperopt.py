@@ -23,7 +23,7 @@ from dicl.adapters import (
     LinearAutoEncoder,
     betaVAE,
     NormalizingFlow,
-    AENormalizingFlow
+    AENormalizingFlow,
 )
 from dicl.utils.main_script import (
     load_moment_model,

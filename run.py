@@ -32,7 +32,7 @@ from dicl.adapters import (
     betaLinearVAE,
     DropoutLinearAutoEncoder,
     LinearDecoder,
-    LinearEncoder
+    LinearEncoder,
 )
 
 
@@ -50,7 +50,7 @@ ADAPTER_CLS = {
 }
 NOT_FULL_COMP_ADAPTERS = []
 MAX_TRAIN_SIZE = 10000
-CUSTOM_N_COMP = [2,5,9,14]
+CUSTOM_N_COMP = [2, 5, 9, 14]
 
 
 @dataclass
