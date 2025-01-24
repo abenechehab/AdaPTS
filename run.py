@@ -28,6 +28,11 @@ from dicl.adapters import (
     betaVAE,
     NormalizingFlow,
     AENormalizingFlow,
+    JustRevIn,
+    betaLinearVAE,
+    DropoutLinearAutoEncoder,
+    LinearDecoder,
+    LinearEncoder
 )
 
 
@@ -38,8 +43,14 @@ ADAPTER_CLS = {
     "VAE": betaVAE,
     "flow": NormalizingFlow,
     "AEflow": AENormalizingFlow,
+    "linearVAE": betaLinearVAE,
+    "dropoutLinearAE": DropoutLinearAutoEncoder,
+    "linearDecoder": LinearDecoder,
+    "linearEncoder": LinearEncoder,
 }
 NOT_FULL_COMP_ADAPTERS = []
+MAX_TRAIN_SIZE = 10000
+CUSTOM_N_COMP = [2,5,9,14]
 
 
 @dataclass
@@ -61,6 +72,7 @@ class Args:
     supervised: bool = False
     use_revin: bool = False
     pca_in_preprocessing: bool = False
+    custom_n_comp: bool = False
 
 
 def main(args: Args):
@@ -96,9 +108,17 @@ def main(args: Args):
         dataset_name, args.context_length, args.forecast_horizon
     )
     time_series = np.concatenate([X_test, y_test], axis=-1)
+    # Limit training size
+    if len(X_train) > MAX_TRAIN_SIZE:
+        indices = np.random.choice(len(X_train), MAX_TRAIN_SIZE, replace=False)
+        X_train = X_train[indices]
+        y_train = y_train[indices]
+        train_size = MAX_TRAIN_SIZE
+    else:
+        train_size = len(X_train)
 
     logger.info(
-        f"Data shape: {time_series.shape}. "
+        f"Test Data shape: {time_series.shape}. X_train shape: {X_train.shape}."
         f"Preparation completed in {time.time() - start_time:.2f} seconds"
     )
 
@@ -108,15 +128,19 @@ def main(args: Args):
 
     model_loaded = False
 
-    if end > start:
-        possible_n_components = np.linspace(
-            start, end, min(number_n_comp_to_try, end - start)
-        ).astype("int32")
+    if args.custom_n_comp:
+        possible_n_components = CUSTOM_N_COMP
     else:
-        possible_n_components = [n_features]
+        if end > start:
+            possible_n_components = np.linspace(
+                start, end, min(number_n_comp_to_try, end - start)
+            ).astype("int32")
+        else:
+            possible_n_components = [n_features]
 
     logger.info(
-        f"n_components to try between {start} and {end}: " f"{possible_n_components}"
+        f"n_components to try between {possible_n_components[0]} and "
+        f"{possible_n_components[-1]}: {possible_n_components}"
     )
 
     for n_components in possible_n_components:
@@ -187,7 +211,15 @@ def main(args: Args):
             learning_rate = adapter_config["learning_rate"]
             batch_size = adapter_config["batch_size"]
         else:
-            adapter = args.adapter
+            if not args.adapter and args.use_revin:
+                adapter = JustRevIn(
+                    num_features=n_features,
+                    context_length=args.context_length,
+                    forecast_horizon=args.forecast_horizon,
+                    device=args.device,
+                ).to(args.device)
+            else:
+                adapter = args.adapter
             learning_rate = 0.001
             batch_size = 32
 
@@ -218,13 +250,13 @@ def main(args: Args):
 
         logger.info(
             f"[{n_components}/{start}:{end}] Starting fitting adapter: "
-            f"{args.model_name}"
+            f"{args.adapter}"
         )
         next_time_cp = time.time()
+        os.makedirs(Path(log_dir) / f"n_comp_{n_components}", exist_ok=True)
         if args.supervised:
             # assert not args.is_fine_tuned, "iclearner must be frozen when adapter is "
             # "(supervised) fine-tuned"
-            os.makedirs(Path(log_dir) / f"n_comp_{n_components}", exist_ok=True)
             DICL.adapter_supervised_fine_tuning(
                 X_train=X_train,
                 y_train=y_train,
@@ -234,6 +266,7 @@ def main(args: Args):
                 log_dir=Path(log_dir) / f"n_comp_{n_components}",
                 learning_rate=learning_rate,
                 batch_size=batch_size,
+                verbose=1,
             )
         else:
             DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
@@ -244,8 +277,8 @@ def main(args: Args):
             )
 
         logger.info(
-            f"[{n_components}/{start}:{end}] adapter fitted and saved in "
-            f"{time.time() - next_time_cp:.2f} seconds"
+            f"[{n_components}/{start}:{end}] adapter fitted (supervised:"
+            f"{args.supervised}) and saved in {time.time() - next_time_cp:.2f} seconds"
         )
         next_time_cp = time.time()
 
@@ -300,6 +333,7 @@ def main(args: Args):
             use_revin=args.use_revin,
             elapsed_time=time.time() - start_time,
             seed=args.seed,
+            train_size=train_size,
         )
 
         logger.info(
