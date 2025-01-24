@@ -109,6 +109,33 @@ class MultichannelProjector:
                 context_length=context_length,
                 forecast_horizon=forecast_horizon,
             ).to(torch.device(device))
+        elif base_projector == "dropoutLinearAE":
+            self.base_projector_ = DropoutLinearAutoEncoder(
+                n_components=n_components,
+                input_dim=self.num_channels,
+                device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
+            ).to(torch.device(device))
+        elif base_projector == "linearDecoder":
+            self.base_projector_ = LinearDecoder(
+                n_components=n_components,
+                input_dim=self.num_channels,
+                device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
+            ).to(torch.device(device))
+        elif base_projector == "linearEncoder":
+            self.base_projector_ = LinearEncoder(
+                n_components=n_components,
+                input_dim=self.num_channels,
+                device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
+            ).to(torch.device(device))
         elif base_projector == "simpleAE":
             self.base_projector_ = SimpleAutoEncoder(
                 n_components=n_components,
@@ -118,6 +145,15 @@ class MultichannelProjector:
             ).to(torch.device(device))
         elif base_projector == "VAE":
             self.base_projector_ = betaVAE(
+                n_components=n_components,
+                input_dim=self.num_channels,
+                device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
+            ).to(torch.device(device))
+        elif base_projector == "linearVAE":
+            self.base_projector_ = betaLinearVAE(
                 n_components=n_components,
                 input_dim=self.num_channels,
                 device=device,
@@ -333,6 +369,7 @@ class LinearAutoEncoder(nn.Module):
 
         # Convert data to tensor
         X_tensor = torch.FloatTensor(X).to(torch.device(self.device))
+        X_tensor = X_tensor.reshape(-1, self.context_length, self.input_dim)
 
         # Split data into train and validation (80-20 split)
         train_size = int(train_proportion * len(X_tensor))
@@ -364,6 +401,9 @@ class LinearAutoEncoder(nn.Module):
             self.train()
             epoch_train_loss = 0
             for batch_x, batch_y in train_loader:
+                batch_x, batch_y = batch_x.reshape(-1, self.input_dim), batch_y.reshape(
+                    -1, self.input_dim
+                )
                 output = self(batch_x)
                 train_loss = criterion(output, batch_y)
 
@@ -378,6 +418,10 @@ class LinearAutoEncoder(nn.Module):
             epoch_val_loss = 0
             with torch.no_grad():
                 for batch_x, batch_y in val_loader:
+                    batch_x, batch_y = (
+                        batch_x.reshape(-1, self.input_dim),
+                        batch_y.reshape(-1, self.input_dim),
+                    )
                     val_output = self(batch_x)
                     val_loss = criterion(val_output, batch_y)
                     epoch_val_loss += val_loss.item()
@@ -405,7 +449,7 @@ class LinearAutoEncoder(nn.Module):
                 X_tensor = self.revin(
                     X_tensor.reshape(-1, self.context_length, self.input_dim),
                     mode="norm",
-                ).reshape(-1, self.n_components)
+                ).reshape(-1, self.input_dim)
             return self.encoder(X_tensor).cpu().detach().numpy()
 
     def transform_torch(self, X):
@@ -413,7 +457,606 @@ class LinearAutoEncoder(nn.Module):
         if self.use_revin:
             X = self.revin(
                 X.reshape(-1, self.context_length, self.input_dim), mode="norm"
-            ).reshape(-1, self.n_components)
+            ).reshape(-1, self.input_dim)
+        return self.encoder(X)
+
+    def inverse_transform(self, X):
+        """Reconstruct from latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                return (
+                    self.revin(
+                        self.decoder(X_tensor).reshape(
+                            -1, self.forecast_horizon, self.input_dim
+                        ),
+                        mode="denorm",
+                    )
+                    .cpu()
+                    .detach()
+                    .numpy()
+                    .reshape(-1, self.input_dim)
+                )
+            return self.decoder(X_tensor).cpu().detach().numpy()
+
+    def inverse_transform_torch(self, X):
+        """Reconstruct from latent space"""
+        if self.use_revin:
+            return self.revin(
+                self.decoder(X).reshape(-1, self.forecast_horizon, self.input_dim),
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        return self.decoder(X)
+
+    def reconstruction_loss(self, X_batch):
+        """Compute reconstruction loss"""
+        X_batch = X_batch.to(self.device)
+        X_reconstructed = self(X_batch)
+        return nn.MSELoss()(X_reconstructed, X_batch)
+
+
+class DropoutLinearAutoEncoder(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        n_components: int,
+        context_length: int,
+        forecast_horizon: int,
+        device: str = "cpu",
+        use_revin: bool = False,
+    ):
+        """
+        Initialize AutoEncoder for feature space projection.
+
+        Args:
+        input_dim: Input dimension
+        n_components: Desired output dimension (latent space)
+        num_layers: Number of layers in encoder and decoder
+        hidden_dim: Number of neurons in hidden layers
+        """
+        super().__init__()
+
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+        self.input_dim = input_dim
+        self.n_components = n_components
+
+        self.device = torch.device(device)
+
+        # Build encoder layers
+        self.encoder = nn.Sequential()
+        self.encoder.add_module("layer0", nn.Linear(input_dim, n_components))
+        self.encoder.add_module("layer0-dropout", nn.Dropout(p=0.1))
+
+        # Build decoder layers
+        self.decoder = nn.Sequential()
+        self.decoder.add_module("layer0", nn.Linear(n_components, input_dim))
+
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
+    def forward(self, x):
+        """Forward pass through autoencoder"""
+        if self.use_revin:
+            revin_input = x.reshape(-1, self.context_length, self.input_dim)
+            after_encoding = self.encoder(
+                self.revin(revin_input, mode="norm").reshape(-1, self.n_components)
+            )
+            after_decoding = self.decoder(after_encoding)
+            reverse_revin_input = after_decoding.reshape(
+                -1, self.context_length, self.input_dim
+            )
+            return self.revin(
+                reverse_revin_input,
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        return self.decoder(self.encoder(x))
+
+    def fit(
+        self,
+        X,
+        y=None,
+        train_proportion=0.8,
+        n_epochs=300,
+        early_stopping_patience=10,
+        learning_rate=1e-3,
+        verbose=1,
+    ):
+        """Compatibility with sklearn interface"""
+        # Move model to specified device
+        self.to(torch.device(self.device))
+
+        # Convert data to tensor
+        X_tensor = torch.FloatTensor(X).to(torch.device(self.device))
+        X_tensor = X_tensor.reshape(-1, self.context_length, self.input_dim)
+
+        # Split data into train and validation (80-20 split)
+        train_size = int(train_proportion * len(X_tensor))
+        train_data = X_tensor[:train_size]
+        val_data = X_tensor[train_size:]
+
+        # Define optimizer, scheduler and loss
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=5, verbose=True
+        )
+        criterion = nn.MSELoss()
+
+        # Create DataLoader for training in batches
+        train_dataset = torch.utils.data.TensorDataset(train_data, train_data)
+        val_dataset = torch.utils.data.TensorDataset(val_data, val_data)
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=32, shuffle=True
+        )
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=32)
+
+        # Training with batches
+        best_val_loss = float("inf")
+        patience_counter = 0
+
+        # Train for 100 epochs
+        for _ in tqdm(range(n_epochs), disable=not verbose, desc="Training Epochs"):
+            # Training phase
+            self.train()
+            epoch_train_loss = 0
+            for batch_x, batch_y in train_loader:
+                batch_x, batch_y = (
+                    batch_x.reshape(-1, self.input_dim),
+                    batch_y.reshape(-1, self.input_dim),
+                )
+                output = self(batch_x)
+                train_loss = criterion(output, batch_y)
+
+                optimizer.zero_grad()
+                train_loss.backward()
+                optimizer.step()
+
+                epoch_train_loss += train_loss.item()
+
+            # Validation phase
+            self.eval()
+            epoch_val_loss = 0
+            with torch.no_grad():
+                for batch_x, batch_y in val_loader:
+                    batch_x, batch_y = (
+                        batch_x.reshape(-1, self.input_dim),
+                        batch_y.reshape(-1, self.input_dim),
+                    )
+                    val_output = self(batch_x)
+                    val_loss = criterion(val_output, batch_y)
+                    epoch_val_loss += val_loss.item()
+
+            # Update scheduler
+            scheduler.step(epoch_val_loss)
+
+            # Early stopping
+            if epoch_val_loss < best_val_loss:
+                best_val_loss = epoch_val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= early_stopping_patience:
+                break
+
+        return self
+
+    def transform(self, X):
+        """Project data to latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                X_tensor = self.revin(
+                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    mode="norm",
+                ).reshape(-1, self.input_dim)
+            return self.encoder(X_tensor).cpu().detach().numpy()
+
+    def transform_torch(self, X):
+        """Project data to latent space"""
+        if self.use_revin:
+            X = self.revin(
+                X.reshape(-1, self.context_length, self.input_dim), mode="norm"
+            ).reshape(-1, self.input_dim)
+        return self.encoder(X)
+
+    def inverse_transform(self, X):
+        """Reconstruct from latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                return (
+                    self.revin(
+                        self.decoder(X_tensor).reshape(
+                            -1, self.forecast_horizon, self.input_dim
+                        ),
+                        mode="denorm",
+                    )
+                    .cpu()
+                    .detach()
+                    .numpy()
+                    .reshape(-1, self.input_dim)
+                )
+            return self.decoder(X_tensor).cpu().detach().numpy()
+
+    def inverse_transform_torch(self, X):
+        """Reconstruct from latent space"""
+        if self.use_revin:
+            return self.revin(
+                self.decoder(X).reshape(-1, self.forecast_horizon, self.input_dim),
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        return self.decoder(X)
+
+    def reconstruction_loss(self, X_batch):
+        """Compute reconstruction loss"""
+        X_batch = X_batch.to(self.device)
+        X_reconstructed = self(X_batch)
+        return nn.MSELoss()(X_reconstructed, X_batch)
+
+
+class LinearDecoder(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        n_components: int,
+        context_length: int,
+        forecast_horizon: int,
+        device: str = "cpu",
+        use_revin: bool = False,
+    ):
+        """
+        Initialize AutoEncoder for feature space projection.
+
+        Args:
+        input_dim: Input dimension
+        n_components: Desired output dimension (latent space)
+        num_layers: Number of layers in encoder and decoder
+        hidden_dim: Number of neurons in hidden layers
+        """
+        super().__init__()
+
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+        self.input_dim = input_dim
+        self.n_components = n_components
+
+        self.device = torch.device(device)
+
+        # Build encoder layers
+        self.encoder = nn.Identity()
+
+        # Build decoder layers
+        self.decoder = nn.Sequential()
+        self.decoder.add_module("layer0", nn.Linear(n_components, input_dim))
+
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
+    def forward(self, x):
+        """Forward pass through autoencoder"""
+        if self.use_revin:
+            revin_input = x.reshape(-1, self.context_length, self.input_dim)
+            after_encoding = self.encoder(
+                self.revin(revin_input, mode="norm").reshape(-1, self.n_components)
+            )
+            after_decoding = self.decoder(after_encoding)
+            reverse_revin_input = after_decoding.reshape(
+                -1, self.context_length, self.input_dim
+            )
+            return self.revin(
+                reverse_revin_input,
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        return self.decoder(self.encoder(x))
+
+    def fit(
+        self,
+        X,
+        y=None,
+        train_proportion=0.8,
+        n_epochs=300,
+        early_stopping_patience=10,
+        learning_rate=1e-3,
+        verbose=1,
+    ):
+        """Compatibility with sklearn interface"""
+        # Move model to specified device
+        self.to(torch.device(self.device))
+
+        # Convert data to tensor
+        X_tensor = torch.FloatTensor(X).to(torch.device(self.device))
+        X_tensor = X_tensor.reshape(-1, self.context_length, self.input_dim)
+
+        # Split data into train and validation (80-20 split)
+        train_size = int(train_proportion * len(X_tensor))
+        train_data = X_tensor[:train_size]
+        val_data = X_tensor[train_size:]
+
+        # Define optimizer, scheduler and loss
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=5, verbose=True
+        )
+        criterion = nn.MSELoss()
+
+        # Create DataLoader for training in batches
+        train_dataset = torch.utils.data.TensorDataset(train_data, train_data)
+        val_dataset = torch.utils.data.TensorDataset(val_data, val_data)
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=32, shuffle=True
+        )
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=32)
+
+        # Training with batches
+        best_val_loss = float("inf")
+        patience_counter = 0
+
+        # Train for 100 epochs
+        for _ in tqdm(range(n_epochs), disable=not verbose, desc="Training Epochs"):
+            # Training phase
+            self.train()
+            epoch_train_loss = 0
+            for batch_x, batch_y in train_loader:
+                batch_x, batch_y = (
+                    batch_x.reshape(-1, self.input_dim),
+                    batch_y.reshape(-1, self.input_dim),
+                )
+                output = self(batch_x)
+                train_loss = criterion(output, batch_y)
+
+                optimizer.zero_grad()
+                train_loss.backward()
+                optimizer.step()
+
+                epoch_train_loss += train_loss.item()
+
+            # Validation phase
+            self.eval()
+            epoch_val_loss = 0
+            with torch.no_grad():
+                for batch_x, batch_y in val_loader:
+                    batch_x, batch_y = (
+                        batch_x.reshape(-1, self.input_dim),
+                        batch_y.reshape(-1, self.input_dim),
+                    )
+                    val_output = self(batch_x)
+                    val_loss = criterion(val_output, batch_y)
+                    epoch_val_loss += val_loss.item()
+
+            # Update scheduler
+            scheduler.step(epoch_val_loss)
+
+            # Early stopping
+            if epoch_val_loss < best_val_loss:
+                best_val_loss = epoch_val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= early_stopping_patience:
+                break
+
+        return self
+
+    def transform(self, X):
+        """Project data to latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                X_tensor = self.revin(
+                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    mode="norm",
+                ).reshape(-1, self.input_dim)
+            return self.encoder(X_tensor).cpu().detach().numpy()
+
+    def transform_torch(self, X):
+        """Project data to latent space"""
+        if self.use_revin:
+            X = self.revin(
+                X.reshape(-1, self.context_length, self.input_dim), mode="norm"
+            ).reshape(-1, self.input_dim)
+        return self.encoder(X)
+
+    def inverse_transform(self, X):
+        """Reconstruct from latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                return (
+                    self.revin(
+                        self.decoder(X_tensor).reshape(
+                            -1, self.forecast_horizon, self.input_dim
+                        ),
+                        mode="denorm",
+                    )
+                    .cpu()
+                    .detach()
+                    .numpy()
+                    .reshape(-1, self.input_dim)
+                )
+            return self.decoder(X_tensor).cpu().detach().numpy()
+
+    def inverse_transform_torch(self, X):
+        """Reconstruct from latent space"""
+        if self.use_revin:
+            return self.revin(
+                self.decoder(X).reshape(-1, self.forecast_horizon, self.input_dim),
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        return self.decoder(X)
+
+    def reconstruction_loss(self, X_batch):
+        """Compute reconstruction loss"""
+        X_batch = X_batch.to(self.device)
+        X_reconstructed = self(X_batch)
+        return nn.MSELoss()(X_reconstructed, X_batch)
+
+
+class LinearEncoder(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        n_components: int,
+        context_length: int,
+        forecast_horizon: int,
+        device: str = "cpu",
+        use_revin: bool = False,
+    ):
+        """
+        Initialize AutoEncoder for feature space projection.
+
+        Args:
+        input_dim: Input dimension
+        n_components: Desired output dimension (latent space)
+        num_layers: Number of layers in encoder and decoder
+        hidden_dim: Number of neurons in hidden layers
+        """
+        super().__init__()
+
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+        self.input_dim = input_dim
+        self.n_components = n_components
+
+        self.device = torch.device(device)
+
+        # Build encoder layers
+        self.encoder = nn.Sequential()
+        self.encoder.add_module("layer0", nn.Linear(input_dim, n_components))
+
+        # Build decoder layers
+        self.decoder = nn.Identity()
+
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
+    def forward(self, x):
+        """Forward pass through autoencoder"""
+        if self.use_revin:
+            revin_input = x.reshape(-1, self.context_length, self.input_dim)
+            after_encoding = self.encoder(
+                self.revin(revin_input, mode="norm").reshape(-1, self.n_components)
+            )
+            after_decoding = self.decoder(after_encoding)
+            reverse_revin_input = after_decoding.reshape(
+                -1, self.context_length, self.input_dim
+            )
+            return self.revin(
+                reverse_revin_input,
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        return self.decoder(self.encoder(x))
+
+    def fit(
+        self,
+        X,
+        y=None,
+        train_proportion=0.8,
+        n_epochs=300,
+        early_stopping_patience=10,
+        learning_rate=1e-3,
+        verbose=1,
+    ):
+        """Compatibility with sklearn interface"""
+        # Move model to specified device
+        self.to(torch.device(self.device))
+
+        # Convert data to tensor
+        X_tensor = torch.FloatTensor(X).to(torch.device(self.device))
+        X_tensor = X_tensor.reshape(-1, self.context_length, self.input_dim)
+
+        # Split data into train and validation (80-20 split)
+        train_size = int(train_proportion * len(X_tensor))
+        train_data = X_tensor[:train_size]
+        val_data = X_tensor[train_size:]
+
+        # Define optimizer, scheduler and loss
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=5, verbose=True
+        )
+        criterion = nn.MSELoss()
+
+        # Create DataLoader for training in batches
+        train_dataset = torch.utils.data.TensorDataset(train_data, train_data)
+        val_dataset = torch.utils.data.TensorDataset(val_data, val_data)
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=32, shuffle=True
+        )
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=32)
+
+        # Training with batches
+        best_val_loss = float("inf")
+        patience_counter = 0
+
+        # Train for 100 epochs
+        for _ in tqdm(range(n_epochs), disable=not verbose, desc="Training Epochs"):
+            # Training phase
+            self.train()
+            epoch_train_loss = 0
+            for batch_x, batch_y in train_loader:
+                batch_x, batch_y = (
+                    batch_x.reshape(-1, self.input_dim),
+                    batch_y.reshape(-1, self.input_dim),
+                )
+                output = self(batch_x)
+                train_loss = criterion(output, batch_y)
+
+                optimizer.zero_grad()
+                train_loss.backward()
+                optimizer.step()
+
+                epoch_train_loss += train_loss.item()
+
+            # Validation phase
+            self.eval()
+            epoch_val_loss = 0
+            with torch.no_grad():
+                for batch_x, batch_y in val_loader:
+                    batch_x, batch_y = (
+                        batch_x.reshape(-1, self.input_dim),
+                        batch_y.reshape(-1, self.input_dim),
+                    )
+                    val_output = self(batch_x)
+                    val_loss = criterion(val_output, batch_y)
+                    epoch_val_loss += val_loss.item()
+
+            # Update scheduler
+            scheduler.step(epoch_val_loss)
+
+            # Early stopping
+            if epoch_val_loss < best_val_loss:
+                best_val_loss = epoch_val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= early_stopping_patience:
+                break
+
+        return self
+
+    def transform(self, X):
+        """Project data to latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                X_tensor = self.revin(
+                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    mode="norm",
+                ).reshape(-1, self.input_dim)
+            return self.encoder(X_tensor).cpu().detach().numpy()
+
+    def transform_torch(self, X):
+        """Project data to latent space"""
+        if self.use_revin:
+            X = self.revin(
+                X.reshape(-1, self.context_length, self.input_dim), mode="norm"
+            ).reshape(-1, self.input_dim)
         return self.encoder(X)
 
     def inverse_transform(self, X):
@@ -698,7 +1341,7 @@ class betaVAE(nn.Module):
         if self.use_revin:
             revin_input = x.reshape(-1, self.context_length, self.input_dim)
             after_encoding = self.encoder(
-                self.revin(revin_input, mode="norm").reshape(-1, self.n_components)
+                self.revin(revin_input, mode="norm").reshape(-1, self.input_dim)
             )
             mu, logvar = (
                 self.latent_mu(after_encoding),
@@ -726,7 +1369,7 @@ class betaVAE(nn.Module):
                 X_tensor = self.revin(
                     X_tensor.reshape(-1, self.context_length, self.input_dim),
                     mode="norm",
-                ).reshape(-1, self.n_components)
+                ).reshape(-1, self.input_dim)
             encoding = self.encoder(X_tensor)
             mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
             return self.reparameterize(mu, logvar).cpu().detach().numpy()
@@ -736,7 +1379,7 @@ class betaVAE(nn.Module):
         if self.use_revin:
             X = self.revin(
                 X.reshape(-1, self.context_length, self.input_dim), mode="norm"
-            ).reshape(-1, self.n_components)
+            ).reshape(-1, self.input_dim)
         encoding = self.encoder(X)
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         return self.reparameterize(mu, logvar)
@@ -864,6 +1507,258 @@ class betaVAE(nn.Module):
             epoch_val_loss = 0
             with torch.no_grad():
                 for batch_x, batch_y in val_loader:
+                    val_output = self(batch_x)
+                    val_loss = criterion(val_output, batch_y)
+                    epoch_val_loss += val_loss.item()
+
+            # Update scheduler
+            scheduler.step(epoch_val_loss)
+
+            # Early stopping
+            if epoch_val_loss < best_val_loss:
+                best_val_loss = epoch_val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= early_stopping_patience:
+                break
+
+        return self
+
+
+class betaLinearVAE(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        n_components: int,
+        context_length: int,
+        forecast_horizon: int,
+        num_layers: int = 1,
+        hidden_dim: int = 64,
+        beta: float = 0.5,
+        device: str = "cpu",
+        use_revin: bool = False,
+    ):
+        """
+        Initialize Variational AutoEncoder for feature space projection.
+
+        Args:
+        input_dim: Input dimension
+        n_components: Desired output dimension (latent space)
+        num_layers: Number of layers in encoder and decoder
+        hidden_dim: Number of neurons in hidden layers
+        """
+        super().__init__()
+
+        self.device = torch.device(device)
+        self.beta = beta
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+        self.n_components = n_components
+        self.input_dim = input_dim
+
+        # Build encoder layers
+        self.encoder = nn.Identity()
+
+        # Build decoder layers
+        self.decoder = nn.Sequential()
+        self.decoder.add_module("layer0", nn.Linear(n_components, input_dim))
+
+        # Build latent space layers
+        self.latent_mu = nn.Linear(input_dim, n_components)
+        self.latent_logvar = nn.Linear(input_dim, n_components)
+
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
+    def reparameterize(self, mu, logvar):
+        """Reparameterization trick to sample from N(mu, var)"""
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        """Forward pass through autoencoder"""
+        if self.use_revin:
+            revin_input = x.reshape(-1, self.context_length, self.input_dim)
+            after_encoding = self.encoder(
+                self.revin(revin_input, mode="norm").reshape(-1, self.input_dim)
+            )
+            mu, logvar = (
+                self.latent_mu(after_encoding),
+                self.latent_logvar(after_encoding),
+            )
+            z = self.reparameterize(mu, logvar)
+            after_decoding = self.decoder(z)
+            reverse_revin_input = after_decoding.reshape(
+                -1, self.context_length, self.input_dim
+            )
+            return self.revin(
+                reverse_revin_input,
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(x)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        z = self.reparameterize(mu, logvar)
+        return self.decoder(z)
+
+    def transform(self, X):
+        """Project data to latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                X_tensor = self.revin(
+                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    mode="norm",
+                ).reshape(-1, self.input_dim)
+            encoding = self.encoder(X_tensor)
+            mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+            return self.reparameterize(mu, logvar).cpu().detach().numpy()
+
+    def transform_torch(self, X):
+        """Project data to latent space"""
+        if self.use_revin:
+            X = self.revin(
+                X.reshape(-1, self.context_length, self.input_dim), mode="norm"
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(X)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        return self.reparameterize(mu, logvar)
+
+    def inverse_transform(self, X):
+        """Reconstruct from latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                return (
+                    self.revin(
+                        self.decoder(X_tensor).reshape(
+                            -1, self.forecast_horizon, self.input_dim
+                        ),
+                        mode="denorm",
+                    )
+                    .cpu()
+                    .detach()
+                    .numpy()
+                    .reshape(-1, self.input_dim)
+                )
+            return self.decoder(X_tensor).cpu().detach().numpy()
+
+    def inverse_transform_torch(self, X):
+        """Reconstruct from latent space"""
+        if self.use_revin:
+            return self.revin(
+                self.decoder(X).reshape(-1, self.forecast_horizon, self.input_dim),
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        return self.decoder(X)
+
+    def reconstruction_loss(self, X_batch):
+        """Compute reconstruction loss"""
+        X_batch = X_batch.to(self.device)
+        if self.use_revin:
+            X_batch = self.revin(
+                X_batch.reshape(-1, self.context_length, self.input_dim),
+                mode="norm",
+            ).reshape(-1, self.n_components)
+        encoding = self.encoder(X_batch)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        z = self.reparameterize(mu, logvar)
+        after_decoding = self.decoder(z)
+        if self.use_revin:
+            after_decoding = self.revin(
+                after_decoding.reshape(-1, self.forecast_horizon, self.input_dim),
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        reconstruction_loss = nn.MSELoss()(after_decoding, X_batch)
+        kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        return reconstruction_loss + self.beta * kl_loss
+
+    def kl_loss(self, X_batch):
+        """Compute KL loss"""
+        X_batch = X_batch.to(self.device)
+        if self.use_revin:
+            X_batch = self.revin(
+                X_batch.reshape(-1, self.context_length, self.input_dim),
+                mode="norm",
+            ).reshape(-1, self.n_components)
+        encoding = self.encoder(X_batch)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        return self.beta * kl_loss
+
+    def fit(
+        self,
+        X,
+        y=None,
+        train_proportion=0.8,
+        n_epochs=300,
+        early_stopping_patience=10,
+        learning_rate=1e-3,
+        verbose=1,
+    ):
+        """Compatibility with sklearn interface"""
+        # Move model to specified device
+        self.to(torch.device(self.device))
+
+        # Convert data to tensor
+        X_tensor = torch.FloatTensor(X).to(torch.device(self.device))
+        X_tensor = X_tensor.reshape(-1, self.context_length, self.input_dim)
+
+        # Split data into train and validation (80-20 split)
+        train_size = int(train_proportion * len(X_tensor))
+        train_data = X_tensor[:train_size]
+        val_data = X_tensor[train_size:]
+
+        # Define optimizer, scheduler and loss
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=5, verbose=True
+        )
+        criterion = nn.MSELoss()
+
+        # Create DataLoader for training in batches
+        train_dataset = torch.utils.data.TensorDataset(train_data, train_data)
+        val_dataset = torch.utils.data.TensorDataset(val_data, val_data)
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=32, shuffle=True
+        )
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=32)
+
+        # Training with batches
+        best_val_loss = float("inf")
+        patience_counter = 0
+
+        # Train for 100 epochs
+        for _ in tqdm(range(n_epochs), disable=not verbose, desc="Training Epochs"):
+            # Training phase
+            self.train()
+            epoch_train_loss = 0
+            for batch_x, batch_y in train_loader:
+                batch_x, batch_y = (
+                    batch_x.reshape(-1, self.input_dim),
+                    batch_y.reshape(-1, self.input_dim),
+                )
+                output = self(batch_x)
+                train_loss = criterion(output, batch_y)
+
+                optimizer.zero_grad()
+                train_loss.backward()
+                optimizer.step()
+
+                epoch_train_loss += train_loss.item()
+
+            # Validation phase
+            self.eval()
+            epoch_val_loss = 0
+            with torch.no_grad():
+                for batch_x, batch_y in val_loader:
+                    batch_x, batch_y = (
+                        batch_x.reshape(-1, self.input_dim),
+                        batch_y.reshape(-1, self.input_dim),
+                    )
                     val_output = self(batch_x)
                     val_loss = criterion(val_output, batch_y)
                     epoch_val_loss += val_loss.item()
@@ -1185,7 +2080,7 @@ class AENormalizingFlow(nn.Module):
     def _coupling_forward(self, x, i):
         """Single coupling layer forward transform"""
         # Split input
-        d = self.input_dim // 2
+        d = self.n_components // 2
         x1, x2 = x[:, :d], x[:, d:]
 
         if i % 2 == 0:
@@ -1193,10 +2088,7 @@ class AENormalizingFlow(nn.Module):
             t = self.t_nets[i](x1)
             x2 = x2 * torch.exp(s) + t
         else:
-            try:
-                s = self.s_scale[i] * self.s_nets[i](x2)
-            except RuntimeError:
-                breakpoint()
+            s = self.s_scale[i] * self.s_nets[i](x2)
             t = self.t_nets[i](x2)
             x1 = x1 * torch.exp(s) + t
 
@@ -1206,7 +2098,7 @@ class AENormalizingFlow(nn.Module):
 
     def _coupling_inverse(self, x, i):
         """Single coupling layer inverse transform"""
-        d = self.input_dim // 2
+        d = self.n_components // 2
         x1, x2 = x[:, :d], x[:, d:]
 
         if i % 2 == 0:
