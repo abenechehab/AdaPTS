@@ -23,6 +23,7 @@ from dicl.adapters import (
     LinearAutoEncoder,
     betaVAE,
     NormalizingFlow,
+    AENormalizingFlow
 )
 from dicl.utils.main_script import (
     load_moment_model,
@@ -35,8 +36,10 @@ ADAPTER_CLS = {
     "linearAE": LinearAutoEncoder,
     "VAE": betaVAE,
     "flow": NormalizingFlow,
+    "AEflow": AENormalizingFlow,
 }
 NOT_FULL_COMP_ADAPTERS = []
+MAX_TRAIN_SIZE = 500
 
 
 @dataclass
@@ -75,7 +78,7 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
                 "beta": tune.choice([0.5, 1, 2, 4]),
             }
         )
-    if adapter_type in ["flow"]:
+    if adapter_type in ["flow", "AEflow"]:
         base_space.update(
             {
                 "num_coupling": tune.choice([1, 2, 3]),
@@ -111,6 +114,16 @@ def train_adapter(
     )
     X_train = np.concatenate([X_train, X_val], axis=0)
     y_train = np.concatenate([y_train, y_val], axis=0)
+
+    # Limit training size
+    if len(X_train) > MAX_TRAIN_SIZE:
+        indices = np.random.choice(len(X_train), MAX_TRAIN_SIZE, replace=False)
+        X_train = X_train[indices]
+        y_train = y_train[indices]
+        train_size = MAX_TRAIN_SIZE
+    else:
+        train_size = len(X_train)
+
     time_series_test = np.concatenate([X_test, y_test], axis=-1)
 
     # Configure adapter
@@ -251,6 +264,7 @@ def train_adapter(
     metrics.update({f"test_{k}": v for k, v in test_metrics.items()})
 
     # Save metrics to CSV
+    config.update({"train_size": train_size})
     save_hyperopt_metrics_to_csv(
         metrics=metrics,
         dataset_name=dataset_name,
