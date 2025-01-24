@@ -7,3 +7,13 @@ Best config for flow with n_comp 7:
 ETTh1, 96
 Best config for VAE with n_comp 7:
 {'learning_rate': 0.001, 'batch_size': 32, 'use_revin': True, 'num_layers': 1, 'hidden_dim': 64, 'beta': 0.5}
+
+Weather, 96
+Best config for VAE with n_comp 21:
+{'learning_rate': 0.001, 'batch_size': 32, 'use_revin': True, 'num_layers': 3, 'hidden_dim': 128, 'beta': 1.0}
+
+ExchangeRate, 96
+Best config for VAE with n_comp 8:
+{'learning_rate': 0.001, 'batch_size': 32, 'use_revin': False, 'num_layers': 2, 'hidden_dim': 256, 'beta': 2.0}
+Best config for AEflow with n_comp 8:
+{'learning_rate': 0.001, 'batch_size': 32, 'use_revin': False, 'num_coupling': 1, 'hidden_dim': 64, 'train_size': 500}

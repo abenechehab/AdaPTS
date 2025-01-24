@@ -1,0 +1,1 @@
+{"learning_rate": 0.001, "batch_size": 32, "use_revin": true, "num_layers": 1, "hidden_dim": 64, "beta": 0.5}
