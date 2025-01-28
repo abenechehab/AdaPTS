@@ -9,7 +9,7 @@ from tqdm import tqdm
 import numpy as np
 from numpy.typing import NDArray
 import torch
-# from torch.optim.lr_scheduler import OneCycleLR
+from torch.optim.lr_scheduler import OneCycleLR
 
 from dicl.utils.icl import (
     serialize_arr,
@@ -437,7 +437,6 @@ class MomentICLTrainer(ICLTrainer):
         verbose: int = 1,
     ):
         """Multi-step prediction using MOMENT model"""
-        self.model.eval()
         # Get device from model
         device = next(self.model.parameters()).device
         if native_multivariate:
@@ -500,12 +499,16 @@ class MomentICLTrainer(ICLTrainer):
         self,
         X: NDArray[np.float32],  # input sequences
         y: NDArray[np.float32],  # target sequences
-        n_epochs: int = 1,
+        n_epochs: int = 50,
         batch_size: int = 8,
         learning_rate: float = 1e-4,
         max_grad_norm: float = 5.0,
         verbose: int = 0,
         seed: int = 13,
+        inverse_transform: callable = torch.nn.Identity(),
+        direct_transform: callable = torch.nn.Identity(),
+        max_patience: int = 5,
+        logger=None,
     ):
         """Fine-tune the model on the given time series data
 
@@ -531,8 +534,18 @@ class MomentICLTrainer(ICLTrainer):
         tensor_X = torch.from_numpy(X).float()
         tensor_y = torch.from_numpy(y).float()
         dataset = torch.utils.data.TensorDataset(tensor_X, tensor_y)
+
+        train_size = int(0.9 * len(dataset))
+        val_size = len(dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(
+            dataset, [train_size, val_size]
+        )
+
         train_loader = torch.utils.data.DataLoader(
-            dataset, batch_size=batch_size, shuffle=True
+            train_dataset, batch_size=batch_size, shuffle=True
+        )
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset, batch_size=batch_size, shuffle=False
         )
 
         # Setup training
@@ -541,14 +554,11 @@ class MomentICLTrainer(ICLTrainer):
         scaler = torch.cuda.amp.GradScaler()
 
         # Create a OneCycleLR scheduler
-        # max_lr = 1e-4
-        # total_steps = len(train_loader) * n_epochs
-        # scheduler = OneCycleLR(
-        #     optimizer,
-        #     max_lr=max_lr,
-        #     total_steps=total_steps,
-        #     pct_start=0.3
-        # )
+        max_lr = 1e-4
+        total_steps = len(train_loader) * n_epochs
+        scheduler = OneCycleLR(
+            optimizer, max_lr=max_lr, total_steps=total_steps, pct_start=0.3
+        )
 
         # Training loop
         for epoch in range(n_epochs):
@@ -557,9 +567,12 @@ class MomentICLTrainer(ICLTrainer):
                 X_batch = X_batch.to(device)
                 y_batch = y_batch.to(device)
 
+                # apply direct transform
+                X_batch = direct_transform(X_batch)
+
                 with torch.cuda.amp.autocast():
                     output = self.model(x_enc=X_batch)
-                    loss = criterion(output.forecast, y_batch)
+                    loss = criterion(inverse_transform(output.forecast), y_batch)
 
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -573,8 +586,64 @@ class MomentICLTrainer(ICLTrainer):
                 losses.append(loss.item())
 
             avg_loss = np.mean(losses)
+
+            # update lr using scheduler
+            scheduler.step()
+
+            # Validation
+            val_losses = []
+            for X_val, y_val in val_loader:
+                X_val = X_val.to(device)
+                y_val = y_val.to(device)
+
+                with torch.no_grad():
+                    output = self.model(x_enc=X_val)
+                    val_loss = criterion(output.forecast, y_val)
+
+                val_losses.append(val_loss.item())
+
+            avg_val_loss = np.mean(val_losses)
+            # Early stopping based on validation loss
+            if epoch == 0:
+                best_val_loss = avg_val_loss
+                patience_counter = 0
+                best_model_weights = copy.deepcopy(self.model.state_dict())
+                best_epoch = epoch
+            else:
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    patience_counter = 0
+                    best_model_weights = copy.deepcopy(self.model.state_dict())
+                    best_epoch = epoch
+                else:
+                    patience_counter += 1
+
+            if patience_counter >= max_patience:  # Early stopping patience
+                if logger:
+                    logger.info(f"Early stopping at epoch {epoch}")
+                else:
+                    print(f"Early stopping at epoch {epoch}")
+                break
+
             if verbose:
-                print(f"Epoch {epoch}: Train loss: {avg_loss:.3f}")
+                if logger:
+                    logger.info(
+                        f"Epoch {epoch}: Train loss: {avg_loss:.3f}, Val loss: "
+                        f"{avg_val_loss:.3f}"
+                    )
+                else:
+                    print(
+                        f"Epoch {epoch}: Train loss: {avg_loss:.3f}, Val loss: "
+                        f"{avg_val_loss:.3f}"
+                    )
+
+        # Restore the best model weights
+        if logger:
+            logger.info(f"Restoring weights from epoch {best_epoch}")
+        else:
+            print(f"Restoring weights from epoch {best_epoch}")
+        self.model.load_state_dict(best_model_weights)
+        del best_model_weights
 
 
 class MoiraiICLTrainer(ICLTrainer):
@@ -654,8 +723,7 @@ class MoiraiICLTrainer(ICLTrainer):
             # Process in batches to avoid memory issues
             all_predictions = []
             for i in tqdm(
-                range(0, self.batch_size, batch_size),
-                desc="inference batch"
+                range(0, self.batch_size, batch_size), desc="inference batch"
             ):
                 batch_end = min(i + batch_size, self.batch_size)
                 batch_ts = tensor_ts[i:batch_end]
