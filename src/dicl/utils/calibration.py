@@ -16,14 +16,9 @@ if TYPE_CHECKING:
 
 def compute_ks_metric(
     groundtruth: NDArray,
-    icl_object: "ICLObject",
-    n_components: int,
+    all_predictions: NDArray,
     n_features: int,
     inverse_transform: Callable,
-    n_traces: int = 100,
-    up_shift: float = 1.5,
-    rescale_factor: float = 7.0,
-    burnin: int = 0,
 ):
     """
     Computes the Kolmogorov-Smirnov (KS) metric between the predicted and ground truth
@@ -38,12 +33,6 @@ def compute_ks_metric(
             the time series oiginal space.
         n_traces (int, optional): Number of trace samples to generate for each
             prediction. Default is 100.
-        up_shift (float, optional): Up-shift value applied during rescaling.
-            Default is 1.5.
-        rescale_factor (float, optional): Rescale factor applied during normalization.
-            Default is 7.0.
-        burnin (int, optional): Number of initial time steps to exclude from the metric
-            computation. Default is 0.
 
     Returns:
         Tuple[NDArray, NDArray]:
@@ -51,53 +40,123 @@ def compute_ks_metric(
             - `ks_quantiles`: Array of KS quantiles for each feature and time step.
     """
 
-    n_samples = len(icl_object[0].PDF_list)
+    # all_predictions shape (n_traces, n_components, n_samples, 1, forecasting_horizon)
+    n_samples = all_predictions.shape[2]
+    prediction_horizon = all_predictions.shape[4]
+    n_traces = all_predictions.shape[0]
 
-    kss = np.zeros((n_features,))
-    ks_quantiles = np.zeros((n_features, n_samples - burnin))
-    predictions = np.empty((n_samples - burnin, n_traces, n_components))
-    for dim in range(n_components):
-        for t in range(n_samples - burnin):
-            PDF = icl_object[dim].PDF_list[burnin + t]
+    kss = np.zeros((n_features, prediction_horizon))
+    ece = np.zeros((n_features, prediction_horizon))
+    ks_quantiles = np.zeros((n_features, prediction_horizon, n_samples))
 
-            ts_min = icl_object[dim].rescaling_min
-            ts_max = icl_object[dim].rescaling_max
+    gather_pred = []
+    for s in range(n_traces):
+        gather_pred.append(
+            inverse_transform(all_predictions[s].swapaxes(0, 1).squeeze())
+        )
+    predictions = np.array(gather_pred).transpose(3, 1, 0, 2)
 
-            bin_center_arr = ((PDF.bin_center_arr - up_shift) / rescale_factor) * (
-                ts_max - ts_min
-            ) + ts_min
-            bin_height_arr = PDF.bin_height_arr / np.sum(PDF.bin_height_arr)
+    for h in range(prediction_horizon):
+        for dim in range(n_features):
+            per_dim_groundtruth = groundtruth[:, dim, h].flatten()
 
-            samples = np.random.choice(
-                bin_center_arr,
-                p=bin_height_arr,
-                size=(n_traces,),
+            # Compute quantiles
+            quantiles = np.sort(
+                np.array(
+                    [
+                        g > m
+                        for g, m in zip(per_dim_groundtruth, predictions[h, :, :, dim])
+                    ]
+                ).sum(axis=1)
+            )
+            quantiles = quantiles / n_traces
+
+            # Compute KS metric
+            kss[dim, h] = np.max(
+                np.abs(quantiles - (np.arange(len(quantiles)) / len(quantiles)))
+            )
+            ece[dim, h] = np.mean(
+                np.abs(quantiles - (np.arange(len(quantiles)) / len(quantiles)))
             )
 
-            predictions[t, :, dim] = copy.copy(samples)
+            ks_quantiles[dim, h, :] = quantiles
 
-    predictions = inverse_transform(predictions.reshape(-1, n_components)).reshape(
-        (n_samples - burnin, n_traces, n_features)
-    )
+    return kss, ece, ks_quantiles
 
-    for dim in range(n_features):
-        per_dim_groundtruth = groundtruth[:, dim].flatten()
 
-        # Compute quantiles
-        quantiles = np.sort(
-            np.array(
-                [g > m for g, m in zip(per_dim_groundtruth, predictions[:, :, dim])]
-            ).sum(axis=1)
-        )
-        quantiles = quantiles / n_traces
+def compute_ks_metric_gaussian(
+    groundtruth: NDArray,
+    icl_object: "ICLObject",
+    n_components: int,
+    n_features: int,
+    inverse_transform: Callable,
+    n_traces: int = 100,
+):
+    """
+    Computes the Kolmogorov-Smirnov (KS) metric between the predicted and ground truth
+    values for each feature in a multivariate time series.
 
-        # Compute KS metric
-        kss[dim] = np.max(
-            np.abs(quantiles - (np.arange(len(quantiles)) / len(quantiles)))
-        )
-        ks_quantiles[dim, :] = quantiles
+    Args:
+        groundtruth (NDArray): The ground truth values for the time series.
+        icl_object (ICLObject): The ICL object containing predicted PDFs.
+        n_components (int): Number of components in the model predictions.
+        n_features (int): Number of features in the time series.
+        inverse_transform (Callable): A function to inverse-transform the predictions to
+            the time series oiginal space.
+        n_traces (int, optional): Number of trace samples to generate for each
+            prediction. Default is 100.
 
-    return kss, ks_quantiles
+    Returns:
+        Tuple[NDArray, NDArray]:
+            - `kss`: Array containing the KS metrics for each feature.
+            - `ks_quantiles`: Array of KS quantiles for each feature and time step.
+    """
+
+    n_samples = icl_object[0].mean_arr.shape[0]
+    prediction_horizon = icl_object[0].mean_arr.shape[-1]
+    kss = np.zeros((n_features, prediction_horizon))
+    ece = np.zeros((n_features, prediction_horizon))
+    ks_quantiles = np.zeros((n_features, prediction_horizon, n_samples))
+    predictions = np.empty((n_traces, n_samples, n_components, prediction_horizon))
+    for h in range(prediction_horizon):
+        for dim in range(n_components):
+            mean = icl_object[dim].mean_arr[:, 0, h]
+            std = icl_object[dim].sigma_arr[:, 0, h]
+            for t in range(n_samples):
+                samples = np.random.normal(mean[t], std[t], size=(n_traces,))
+                predictions[:, t, dim, h] = copy.copy(samples)
+
+    gather_pred = []
+    for s in range(n_traces):
+        gather_pred.append(inverse_transform(predictions[s]))
+    predictions = np.array(gather_pred).transpose(3, 1, 0, 2)
+
+    for h in range(prediction_horizon):
+        for dim in range(n_features):
+            per_dim_groundtruth = groundtruth[:, dim, h].flatten()
+
+            # Compute quantiles
+            quantiles = np.sort(
+                np.array(
+                    [
+                        g > m
+                        for g, m in zip(per_dim_groundtruth, predictions[h, :, :, dim])
+                    ]
+                ).sum(axis=1)
+            )
+            quantiles = quantiles / n_traces
+
+            # Compute KS metric
+            kss[dim, h] = np.max(
+                np.abs(quantiles - (np.arange(len(quantiles)) / len(quantiles)))
+            )
+            ece[dim, h] = np.mean(
+                np.abs(quantiles - (np.arange(len(quantiles)) / len(quantiles)))
+            )
+
+            ks_quantiles[dim, h, :] = quantiles
+
+    return kss, ece, ks_quantiles
 
 
 def ks_cdf(
