@@ -24,6 +24,10 @@ from dicl.adapters import (
     betaVAE,
     NormalizingFlow,
     AENormalizingFlow,
+    betaLinearVAE,
+    DropoutLinearAutoEncoder,
+    LinearDecoder,
+    LinearEncoder,
 )
 from dicl.utils.main_script import (
     load_moment_model,
@@ -37,6 +41,10 @@ ADAPTER_CLS = {
     "VAE": betaVAE,
     "flow": NormalizingFlow,
     "AEflow": AENormalizingFlow,
+    "linearVAE": betaLinearVAE,
+    "dropoutLinearAE": DropoutLinearAutoEncoder,
+    "linearDecoder": LinearDecoder,
+    "linearEncoder": LinearEncoder,
 }
 NOT_FULL_COMP_ADAPTERS = []
 MAX_TRAIN_SIZE = 500
@@ -61,18 +69,18 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
     base_space = {
         "learning_rate": tune.choice([1e-3]),
         "batch_size": tune.choice([32]),
-        "use_revin": tune.choice([True, False]),
+        "use_revin": tune.choice([True]),
     }
 
     if adapter_type in ["simpleAE", "VAE"]:
         base_space.update(
             {
-                "num_layers": tune.choice([1, 2, 3]),
-                "hidden_dim": tune.choice([64, 128, 256]),
+                "num_layers": tune.choice([1, 2]),
+                "hidden_dim": tune.choice([64, 128]),
                 # "coeff_reconstruction": tune.choice([0.0, 1e-2, 1e-1]),
             }
         )
-    if adapter_type in ["VAE"]:
+    if "VAE" in adapter_type:
         base_space.update(
             {
                 "beta": tune.choice([0.5, 1, 2, 4]),
@@ -82,7 +90,13 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
         base_space.update(
             {
                 "num_coupling": tune.choice([1, 2, 3]),
-                "hidden_dim": tune.choice([64, 128, 256]),
+                "hidden_dim": tune.choice([64, 128]),
+            }
+        )
+    if "dropout" in adapter_type or adapter_type == "AEflow":
+        base_space.update(
+            {
+                "p": tune.choice([0.1, 0.2, 0.3, 0.4]),
             }
         )
 
@@ -147,11 +161,23 @@ def train_adapter(
                 "hidden_dim": config["hidden_dim"],
             }
         )
-    elif adapter_type in ["flow"]:
+    if "flow" in adapter_type:
         adapter_params.update(
             {
                 "num_coupling": config["num_coupling"],
                 "hidden_dim": config["hidden_dim"],
+            }
+        )
+    if "VAE" in adapter_type:
+        adapter_params.update(
+            {
+                "beta": config["beta"],
+            }
+        )
+    if "dropout" in adapter_type:
+        adapter_params.update(
+            {
+                "p": config["p"],
             }
         )
 
@@ -161,10 +187,9 @@ def train_adapter(
     training_params = {
         "learning_rate": config["learning_rate"],
         "batch_size": config["batch_size"],
-        "coeff_reconstruction": config.get("coeff_reconstruction", 0),
-        "early_stopping_patience": 10,
         "device": device,  # Use the determined device
         "log_dir": train.get_context().get_trial_dir(),
+        "n_epochs": 100,
     }
 
     # model
@@ -231,6 +256,16 @@ def train_adapter(
         )
 
         # Train on this fold
+        dicl_model.fine_tune_iclearner(
+            X=X_train,
+            y=y_train,
+            batch_size=config["batch_size"],
+            learning_rate=config["learning_rate"],
+            verbose=0,
+            use_disentangler=False,
+            n_epochs=50,
+            seed=seed,
+        )
         dicl_model.adapter_supervised_fine_tuning(
             X_fold_train,
             y_fold_train,
@@ -265,6 +300,7 @@ def train_adapter(
 
     # Save metrics to CSV
     config.update({"train_size": train_size})
+    config.update({"training": "full"})
     save_hyperopt_metrics_to_csv(
         metrics=metrics,
         dataset_name=dataset_name,
