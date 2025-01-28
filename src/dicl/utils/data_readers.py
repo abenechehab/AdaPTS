@@ -163,7 +163,7 @@ class DataReader:
                 training_set=training_set, channel_idx=channel_idx
             )
         else:
-            raise KeyError("Unknown dataset name.")
+            raise KeyError(f"Unknown dataset name {dataset_name}.")
         # encode labels to 0...K-1 if classification dataset
         x, y = data
         if (
