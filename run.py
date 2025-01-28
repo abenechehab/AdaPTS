@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import time
 import random
+import warnings
 
 from dataclasses import dataclass
 from typing import Optional
@@ -36,6 +37,7 @@ from dicl.adapters import (
 )
 
 
+warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["HF_HOME"] = "/mnt/vdb/hugguingface/"
 ADAPTER_CLS = {
     "simpleAE": SimpleAutoEncoder,
@@ -61,15 +63,15 @@ class Args:
     context_length: int = 512
     dataset_name: str = "ETTh1"  # Will be set based on forecast_horizon
     adapter: Optional[str] = None  # "pca"
-    data_path: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/results/data.csv")
+    data_path: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/results/data_latest.csv")
     seed: int = 13
     device: str = "cpu"
     logger_name: str = "DICL Adapter"
     log_level: str = "INFO"
-    log_dir: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/logs/logger")
+    log_dir: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/logs/latest")
     number_n_comp_to_try: int = 4
-    inference_batch_size: int = 512
-    supervised: bool = False
+    inference_batch_size: int = 128
+    supervised: str = "False"
     use_revin: bool = False
     pca_in_preprocessing: bool = False
     custom_n_comp: bool = False
@@ -199,11 +201,23 @@ def main(args: Args):
                         "hidden_dim": adapter_config["hidden_dim"],
                     }
                 )
-            elif args.adapter in ["flow", "AEflow"]:
+            if args.adapter in ["flow", "AEflow"]:
                 adapter_params.update(
                     {
                         "num_coupling": adapter_config["num_coupling"],
                         "hidden_dim": adapter_config["hidden_dim"],
+                    }
+                )
+            if "VAE" in args.adapter:
+                adapter_params.update(
+                    {
+                        "beta": adapter_config["beta"],
+                    }
+                )
+            if "dropout" in args.adapter or args.adapter == "AEflow":
+                adapter_params.update(
+                    {
+                        "p": adapter_config["p"],
                     }
                 )
 
@@ -254,9 +268,7 @@ def main(args: Args):
         )
         next_time_cp = time.time()
         os.makedirs(Path(log_dir) / f"n_comp_{n_components}", exist_ok=True)
-        if args.supervised:
-            # assert not args.is_fine_tuned, "iclearner must be frozen when adapter is "
-            # "(supervised) fine-tuned"
+        if args.supervised == "True":
             DICL.adapter_supervised_fine_tuning(
                 X_train=X_train,
                 y_train=y_train,
@@ -268,8 +280,117 @@ def main(args: Args):
                 batch_size=batch_size,
                 verbose=1,
             )
-        else:
+        elif args.supervised == "full":
+            DICL.adapter_and_head_supervised_fine_tuning(
+                X_train=X_train,
+                y_train=y_train,
+                X_val=X_val,
+                y_val=y_val,
+                device=args.device,
+                log_dir=Path(log_dir) / f"n_comp_{n_components}",
+                learning_rate=learning_rate,
+                batch_size=batch_size,
+                verbose=1,
+            )
+        elif args.supervised == "ft_then_supervised":
+            DICL.fine_tune_iclearner(
+                X=X_train,
+                y=y_train,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                verbose=1,
+                use_disentangler=False,
+                n_epochs=50,
+                logger=logger,
+                seed=args.seed,
+            )
+            logger.info(
+                f"[{n_components}/{start}:{end}] Done fine tuning, now training adapter"
+            )
+            DICL.adapter_supervised_fine_tuning(
+                X_train=X_train,
+                y_train=y_train,
+                X_val=X_val,
+                y_val=y_val,
+                device=args.device,
+                log_dir=Path(log_dir) / f"n_comp_{n_components}",
+                learning_rate=learning_rate,
+                batch_size=batch_size,
+                verbose=1,
+                n_epochs=100,
+                logger=logger,
+            )
+        elif args.supervised == "bilevel":
+            DICL.fine_tune_iclearner(
+                X=X_train,
+                y=y_train,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                verbose=1,
+                use_disentangler=False,
+                n_epochs=50,
+                logger=logger,
+            )
+            logger.info(
+                f"[{n_components}/{start}:{end}] Done fine tuning, now training adapter"
+            )
+            DICL.adapter_supervised_fine_tuning(
+                X_train=X_train,
+                y_train=y_train,
+                X_val=X_val,
+                y_val=y_val,
+                device=args.device,
+                log_dir=Path(log_dir) / f"n_comp_{n_components}",
+                learning_rate=learning_rate,
+                batch_size=batch_size,
+                verbose=1,
+                n_epochs=100,
+                logger=logger,
+            )
+            logger.info(
+                f"[{n_components}/{start}:{end}] Done training adapter, now fine "
+                "tuning again ;)"
+            )
+            DICL.fine_tune_iclearner(
+                X=X_train,
+                y=y_train,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                verbose=1,
+                use_disentangler=True,
+                n_epochs=50,
+                logger=logger,
+            )
+        elif args.supervised == "ft":
+            DICL.fine_tune_iclearner(
+                X=X_train,
+                y=y_train,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                verbose=1,
+                use_disentangler=False,
+                n_epochs=50,
+                logger=logger,
+            )
             DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
+        elif args.supervised == "unsupervised":
+            DICL.fine_tune_iclearner(
+                X=X_train,
+                y=y_train,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                verbose=1,
+                use_disentangler=False,
+                n_epochs=50,
+                logger=logger,
+                seed=args.seed,
+            )
+            logger.info(
+                f"[{n_components}/{start}:{end}] Done fine tuning, now training adapter"
+            )
+            DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
+        else:
+            raise ValueError(f"Invalid supervised argument: {args.supervised}")
         if args.adapter and args.adapter not in ["pca"]:
             torch.save(
                 DICL.disentangler.base_projector_,
@@ -282,28 +403,12 @@ def main(args: Args):
         )
         next_time_cp = time.time()
 
-        if args.is_fine_tuned:
-            DICL.fine_tune_iclearner(
-                X=X_train,
-                y=y_train,
-                n_epochs=1,
-                batch_size=8,
-                learning_rate=1e-4,
-                max_grad_norm=5.0,
-                verbose=1,
-                seed=args.seed,
-            )
-            logger.info(
-                f"[{n_components}/{start}:{end}] iclearner fine-tuned in "
-                f"{time.time() - next_time_cp:.2f} seconds"
-            )
-            next_time_cp = time.time()
-
         with torch.no_grad():
             _, _, _, _ = DICL.predict_multi_step(
                 X=time_series,
                 prediction_horizon=args.forecast_horizon,
                 batch_size=args.inference_batch_size,
+                n_samples=25,
             )
 
         logger.info(
@@ -312,10 +417,10 @@ def main(args: Args):
         )
         next_time_cp = time.time()
 
-        metrics = DICL.compute_metrics()
+        metrics = DICL.compute_metrics(logdir=Path(log_dir) / f"n_comp_{n_components}")
         logger.info(
-            f"[{n_components}/{start}:{end}] metrics computed in "
-            f"{time.time() - next_time_cp:.2f} seconds"
+            f"[{n_components}/{start}:{end}] metrics [mse={metrics['mse']},"
+            f"mae={metrics['mae']}] computed in {time.time() - next_time_cp:.2f} sec"
         )
 
         save_metrics_to_csv(
@@ -328,7 +433,7 @@ def main(args: Args):
             args.context_length,
             args.forecast_horizon,
             args.data_path,
-            is_fine_tuned="supervised" if args.supervised else args.is_fine_tuned,
+            is_fine_tuned=args.supervised,
             pca_in_preprocessing=args.pca_in_preprocessing,
             use_revin=args.use_revin,
             elapsed_time=time.time() - start_time,
