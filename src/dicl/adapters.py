@@ -1,5 +1,6 @@
 from typing import Optional, Union, Any
 from tqdm import tqdm
+import copy
 
 import numpy as np
 from numpy.typing import NDArray
@@ -39,13 +40,24 @@ class IdentityTransformer(BaseEstimator, TransformerMixin):
     def fit(self, input_array: NDArray, y: Optional[NDArray] = None):
         return self
 
-    def transform(self, input_array: NDArray, y: Optional[NDArray] = None) -> NDArray:
+    def transform(
+        self,
+        input_array: NDArray,
+        seq_len: Optional[int] = None,
+        y: Optional[NDArray] = None,
+    ) -> NDArray:
         return input_array * 1
 
     def inverse_transform(
-        self, input_array: NDArray, y: Optional[NDArray] = None
+        self,
+        input_array: NDArray,
+        seq_len: Optional[int] = None,
+        y: Optional[NDArray] = None,
     ) -> NDArray:
         return input_array * 1
+
+    def forward(self, x):
+        return x
 
 
 class MultichannelProjector:
@@ -219,7 +231,10 @@ class MultichannelProjector:
             num_samples * num_patches, self.patch_window_size_ * num_channels
         )
 
-        X_transformed = self.base_projector_.transform(X_2d)
+        if hasattr(self.base_projector_, "forward"):
+            X_transformed = self.base_projector_.transform(X_2d, seq_len=seq_len)
+        else:
+            X_transformed = self.base_projector_.transform(X_2d)
         X_transformed = X_transformed.reshape(
             [num_samples, seq_len, self.new_num_channels]
         )
@@ -265,7 +280,12 @@ class MultichannelProjector:
             num_samples * num_patches, self.patch_window_size_ * num_channels
         )
 
-        X_inverse_transformed = self.base_projector_.inverse_transform(X_2d)
+        if hasattr(self.base_projector_, "forward"):
+            X_inverse_transformed = self.base_projector_.inverse_transform(
+                X_2d, seq_len=seq_len
+            )
+        else:
+            X_inverse_transformed = self.base_projector_.inverse_transform(X_2d)
         X_inverse_transformed = X_inverse_transformed.reshape(
             [num_samples, seq_len, self.num_channels]
         )
@@ -442,13 +462,13 @@ class LinearAutoEncoder(nn.Module):
 
         return self
 
-    def transform(self, X):
+    def transform(self, X, seq_len: int):
         """Project data to latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 X_tensor = self.revin(
-                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    X_tensor.reshape(-1, seq_len, self.input_dim),
                     mode="norm",
                 ).reshape(-1, self.input_dim)
             return self.encoder(X_tensor).cpu().detach().numpy()
@@ -461,16 +481,14 @@ class LinearAutoEncoder(nn.Module):
             ).reshape(-1, self.input_dim)
         return self.encoder(X)
 
-    def inverse_transform(self, X):
+    def inverse_transform(self, X, seq_len: int):
         """Reconstruct from latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 return (
                     self.revin(
-                        self.decoder(X_tensor).reshape(
-                            -1, self.forecast_horizon, self.input_dim
-                        ),
+                        self.decoder(X_tensor).reshape(-1, seq_len, self.input_dim),
                         mode="denorm",
                     )
                     .cpu()
@@ -503,6 +521,7 @@ class DropoutLinearAutoEncoder(nn.Module):
         n_components: int,
         context_length: int,
         forecast_horizon: int,
+        p: float = 0.4,
         device: str = "cpu",
         use_revin: bool = False,
     ):
@@ -527,7 +546,7 @@ class DropoutLinearAutoEncoder(nn.Module):
         # Build encoder layers
         self.encoder = nn.Sequential()
         self.encoder.add_module("layer0", nn.Linear(input_dim, n_components))
-        self.encoder.add_module("layer0-dropout", nn.Dropout(p=0.1))
+        self.encoder.add_module("layer0-dropout", nn.Dropout(p=p))
 
         # Build decoder layers
         self.decoder = nn.Sequential()
@@ -643,13 +662,13 @@ class DropoutLinearAutoEncoder(nn.Module):
 
         return self
 
-    def transform(self, X):
+    def transform(self, X, seq_len: int):
         """Project data to latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 X_tensor = self.revin(
-                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    X_tensor.reshape(-1, seq_len, self.input_dim),
                     mode="norm",
                 ).reshape(-1, self.input_dim)
             return self.encoder(X_tensor).cpu().detach().numpy()
@@ -662,16 +681,14 @@ class DropoutLinearAutoEncoder(nn.Module):
             ).reshape(-1, self.input_dim)
         return self.encoder(X)
 
-    def inverse_transform(self, X):
+    def inverse_transform(self, X, seq_len: int):
         """Reconstruct from latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 return (
                     self.revin(
-                        self.decoder(X_tensor).reshape(
-                            -1, self.forecast_horizon, self.input_dim
-                        ),
+                        self.decoder(X_tensor).reshape(-1, seq_len, self.input_dim),
                         mode="denorm",
                     )
                     .cpu()
@@ -842,13 +859,13 @@ class LinearDecoder(nn.Module):
 
         return self
 
-    def transform(self, X):
+    def transform(self, X, seq_len: int):
         """Project data to latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 X_tensor = self.revin(
-                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    X_tensor.reshape(-1, seq_len, self.input_dim),
                     mode="norm",
                 ).reshape(-1, self.input_dim)
             return self.encoder(X_tensor).cpu().detach().numpy()
@@ -861,16 +878,14 @@ class LinearDecoder(nn.Module):
             ).reshape(-1, self.input_dim)
         return self.encoder(X)
 
-    def inverse_transform(self, X):
+    def inverse_transform(self, X, seq_len: int):
         """Reconstruct from latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 return (
                     self.revin(
-                        self.decoder(X_tensor).reshape(
-                            -1, self.forecast_horizon, self.input_dim
-                        ),
+                        self.decoder(X_tensor).reshape(-1, seq_len, self.input_dim),
                         mode="denorm",
                     )
                     .cpu()
@@ -1041,13 +1056,13 @@ class LinearEncoder(nn.Module):
 
         return self
 
-    def transform(self, X):
+    def transform(self, X, seq_len: int):
         """Project data to latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 X_tensor = self.revin(
-                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    X_tensor.reshape(-1, seq_len, self.input_dim),
                     mode="norm",
                 ).reshape(-1, self.input_dim)
             return self.encoder(X_tensor).cpu().detach().numpy()
@@ -1060,16 +1075,14 @@ class LinearEncoder(nn.Module):
             ).reshape(-1, self.input_dim)
         return self.encoder(X)
 
-    def inverse_transform(self, X):
+    def inverse_transform(self, X, seq_len: int):
         """Reconstruct from latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 return (
                     self.revin(
-                        self.decoder(X_tensor).reshape(
-                            -1, self.forecast_horizon, self.input_dim
-                        ),
+                        self.decoder(X_tensor).reshape(-1, seq_len, self.input_dim),
                         mode="denorm",
                     )
                     .cpu()
@@ -1275,8 +1288,8 @@ class betaVAE(nn.Module):
         n_components: int,
         context_length: int,
         forecast_horizon: int,
-        num_layers: int = 1,
-        hidden_dim: int = 64,
+        num_layers: int = 2,
+        hidden_dim: int = 128,
         beta: float = 0.5,
         device: str = "cpu",
         use_revin: bool = False,
@@ -1362,13 +1375,13 @@ class betaVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         return self.decoder(z)
 
-    def transform(self, X):
+    def transform(self, X, seq_len: int):
         """Project data to latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 X_tensor = self.revin(
-                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    X_tensor.reshape(-1, seq_len, self.input_dim),
                     mode="norm",
                 ).reshape(-1, self.input_dim)
             encoding = self.encoder(X_tensor)
@@ -1385,16 +1398,14 @@ class betaVAE(nn.Module):
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         return self.reparameterize(mu, logvar)
 
-    def inverse_transform(self, X):
+    def inverse_transform(self, X, seq_len: int):
         """Reconstruct from latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 return (
                     self.revin(
-                        self.decoder(X_tensor).reshape(
-                            -1, self.forecast_horizon, self.input_dim
-                        ),
+                        self.decoder(X_tensor).reshape(-1, seq_len, self.input_dim),
                         mode="denorm",
                     )
                     .cpu()
@@ -1535,8 +1546,6 @@ class betaLinearVAE(nn.Module):
         n_components: int,
         context_length: int,
         forecast_horizon: int,
-        num_layers: int = 1,
-        hidden_dim: int = 64,
         beta: float = 0.5,
         device: str = "cpu",
         use_revin: bool = False,
@@ -1605,13 +1614,13 @@ class betaLinearVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         return self.decoder(z)
 
-    def transform(self, X):
+    def transform(self, X, seq_len: int):
         """Project data to latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 X_tensor = self.revin(
-                    X_tensor.reshape(-1, self.context_length, self.input_dim),
+                    X_tensor.reshape(-1, seq_len, self.input_dim),
                     mode="norm",
                 ).reshape(-1, self.input_dim)
             encoding = self.encoder(X_tensor)
@@ -1628,16 +1637,14 @@ class betaLinearVAE(nn.Module):
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         return self.reparameterize(mu, logvar)
 
-    def inverse_transform(self, X):
+    def inverse_transform(self, X, seq_len: int):
         """Reconstruct from latent space"""
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
             if self.use_revin:
                 return (
                     self.revin(
-                        self.decoder(X_tensor).reshape(
-                            -1, self.forecast_horizon, self.input_dim
-                        ),
+                        self.decoder(X_tensor).reshape(-1, seq_len, self.input_dim),
                         mode="denorm",
                     )
                     .cpu()
@@ -1656,12 +1663,16 @@ class betaLinearVAE(nn.Module):
             ).reshape(-1, self.input_dim)
         return self.decoder(X)
 
-    def reconstruction_loss(self, X_batch):
+    def reconstruction_loss(self, X_batch, input_seq_len=None, output_seq_len=None):
         """Compute reconstruction loss"""
+        if not input_seq_len:
+            input_seq_len = self.context_length
+        if not output_seq_len:
+            output_seq_len = self.forecast_horizon
         X_batch = X_batch.to(self.device)
         if self.use_revin:
             X_batch = self.revin(
-                X_batch.reshape(-1, self.context_length, self.input_dim),
+                X_batch.reshape(-1, input_seq_len, self.input_dim),
                 mode="norm",
             ).reshape(-1, self.n_components)
         encoding = self.encoder(X_batch)
@@ -1670,7 +1681,7 @@ class betaLinearVAE(nn.Module):
         after_decoding = self.decoder(z)
         if self.use_revin:
             after_decoding = self.revin(
-                after_decoding.reshape(-1, self.forecast_horizon, self.input_dim),
+                after_decoding.reshape(-1, output_seq_len, self.input_dim),
                 mode="denorm",
             ).reshape(-1, self.input_dim)
         reconstruction_loss = nn.MSELoss()(after_decoding, X_batch)
@@ -1695,7 +1706,7 @@ class betaLinearVAE(nn.Module):
         X,
         y=None,
         train_proportion=0.8,
-        n_epochs=300,
+        n_epochs=100,
         early_stopping_patience=10,
         learning_rate=1e-3,
         verbose=1,
@@ -1718,7 +1729,6 @@ class betaLinearVAE(nn.Module):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="min", factor=0.5, patience=5, verbose=True
         )
-        criterion = nn.MSELoss()
 
         # Create DataLoader for training in batches
         train_dataset = torch.utils.data.TensorDataset(train_data, train_data)
@@ -1733,17 +1743,15 @@ class betaLinearVAE(nn.Module):
         patience_counter = 0
 
         # Train for 100 epochs
-        for _ in tqdm(range(n_epochs), disable=not verbose, desc="Training Epochs"):
+        for epoch in tqdm(range(n_epochs), disable=not verbose, desc="Training Epochs"):
             # Training phase
             self.train()
             epoch_train_loss = 0
-            for batch_x, batch_y in train_loader:
-                batch_x, batch_y = (
+            for batch_x, _ in train_loader:
+                train_loss = self.reconstruction_loss(
                     batch_x.reshape(-1, self.input_dim),
-                    batch_y.reshape(-1, self.input_dim),
+                    output_seq_len=self.context_length,
                 )
-                output = self(batch_x)
-                train_loss = criterion(output, batch_y)
 
                 optimizer.zero_grad()
                 train_loss.backward()
@@ -1755,17 +1763,34 @@ class betaLinearVAE(nn.Module):
             self.eval()
             epoch_val_loss = 0
             with torch.no_grad():
-                for batch_x, batch_y in val_loader:
-                    batch_x, batch_y = (
+                for batch_x, _ in val_loader:
+                    val_loss = self.reconstruction_loss(
                         batch_x.reshape(-1, self.input_dim),
-                        batch_y.reshape(-1, self.input_dim),
+                        output_seq_len=self.context_length,
                     )
-                    val_output = self(batch_x)
-                    val_loss = criterion(val_output, batch_y)
                     epoch_val_loss += val_loss.item()
 
             # Update scheduler
             scheduler.step(epoch_val_loss)
+
+            # Early stopping based on validation loss
+            if epoch == 0:
+                best_val_loss = val_loss
+                patience_counter = 0
+                best_model_weights = copy.deepcopy(self.state_dict())
+                best_epoch = epoch
+            else:
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                    best_model_weights = copy.deepcopy(self.state_dict())
+                    best_epoch = epoch
+                else:
+                    patience_counter += 1
+
+            if patience_counter >= early_stopping_patience:  # Early stopping patience
+                print(f"Early stopping at epoch {epoch}")
+                break
 
             # Early stopping
             if epoch_val_loss < best_val_loss:
@@ -1776,6 +1801,9 @@ class betaLinearVAE(nn.Module):
 
             if patience_counter >= early_stopping_patience:
                 break
+        print(f"Restoring weights from epoch {best_epoch}")
+        self.load_state_dict(best_model_weights)
+        del best_model_weights
 
         return self
 
@@ -1961,7 +1989,8 @@ class AENormalizingFlow(nn.Module):
         context_length: int,
         forecast_horizon: int,
         num_coupling: int = 1,
-        hidden_dim: int = 256,
+        hidden_dim: int = 128,
+        p: float = 0.1,
         device: str = "cpu",
         use_revin: bool = False,
     ):
@@ -1987,6 +2016,7 @@ class AENormalizingFlow(nn.Module):
         # Linear encoder to map into a low-dimensional space
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, n_components),
+            nn.Dropout(p=p),
         )
         # Linear decoder to map back to the original space
         self.decoder = nn.Sequential(
@@ -2052,15 +2082,17 @@ class AENormalizingFlow(nn.Module):
         if use_revin:
             self.revin = RevIN(num_features=input_dim)
 
-    def forward(self, x, inverse: bool = False):
+    def forward(self, x, inverse: bool = False, seq_len: Optional[int] = None):
         """Forward pass - transform input to latent space"""
         log_det = torch.zeros(x.shape[0]).to(self.device)
 
         if not inverse:
+            if not seq_len:
+                seq_len = self.context_length
             # Forward transform
             if self.use_revin:
                 x = self.revin(
-                    x.reshape(-1, self.context_length, self.input_dim), mode="norm"
+                    x.reshape(-1, seq_len, self.input_dim), mode="norm"
                 ).reshape(-1, self.input_dim)
                 x = self.encoder(x)
             for i in range(self.num_coupling):
@@ -2068,13 +2100,15 @@ class AENormalizingFlow(nn.Module):
                 log_det += ld
             return x, log_det
         else:
+            if not seq_len:
+                seq_len = self.forecast_horizon
             # Inverse transform for sampling
             for i in reversed(range(self.num_coupling)):
                 x = self._coupling_inverse(x, i)
             if self.use_revin:
                 x = self.decoder(x)
                 x = self.revin(
-                    x.reshape(-1, self.forecast_horizon, self.input_dim), mode="denorm"
+                    x.reshape(-1, seq_len, self.input_dim), mode="denorm"
                 ).reshape(-1, self.input_dim)
             return x
 
@@ -2113,12 +2147,12 @@ class AENormalizingFlow(nn.Module):
 
         return torch.cat([x1, x2], dim=1)
 
-    def transform(self, X):
+    def transform(self, X, seq_len: int):
         """Project data to latent space (numpy interface)"""
         self.eval()
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
-            z, _ = self.forward(X_tensor, inverse=False)
+            z, _ = self.forward(X_tensor, inverse=False, seq_len=seq_len)
             return z.cpu().detach().numpy()
 
     def transform_torch(self, X):
@@ -2126,12 +2160,12 @@ class AENormalizingFlow(nn.Module):
         z, _ = self.forward(X, inverse=False)
         return z
 
-    def inverse_transform(self, Z):
+    def inverse_transform(self, Z, seq_len: int):
         """Reconstruct from latent space (numpy interface)"""
         self.eval()
         with torch.no_grad():
             Z_tensor = torch.FloatTensor(Z).to(self.device)
-            x = self.forward(Z_tensor, inverse=True)
+            x = self.forward(Z_tensor, inverse=True, seq_len=seq_len)
             return x.cpu().detach().numpy()
 
     def inverse_transform_torch(self, Z):
@@ -2160,24 +2194,28 @@ class JustRevIn(nn.Module):
 
         self.revin = RevIN(num_features=num_features)
 
-    def forward(self, x, mode: str):
+    def forward(self, x, mode: str, seq_len: Optional[int] = None):
         if mode == "norm":
+            if not seq_len:
+                seq_len = self.context_length
             return self.revin(
-                x.reshape(-1, self.context_length, self.num_features), mode="norm"
+                x.reshape(-1, seq_len, self.num_features), mode="norm"
             ).reshape(-1, self.num_features)
         elif mode == "denorm":
+            if not seq_len:
+                seq_len = self.forecast_horizon
             return self.revin(
-                x.reshape(-1, self.forecast_horizon, self.num_features), mode="denorm"
+                x.reshape(-1, seq_len, self.num_features), mode="denorm"
             ).reshape(-1, self.num_features)
         else:
             raise ValueError("Invalid mode. Must be 'norm' or 'denorm'")
 
-    def transform(self, X):
+    def transform(self, X, seq_len: int):
         """Project data to latent space (numpy interface)"""
         self.eval()
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X).to(self.device)
-            z = self.forward(X_tensor, mode="norm")
+            z = self.forward(X_tensor, mode="norm", seq_len=seq_len)
             return z.cpu().detach().numpy()
 
     def transform_torch(self, X):
@@ -2185,12 +2223,12 @@ class JustRevIn(nn.Module):
         z = self.forward(X, mode="norm")
         return z
 
-    def inverse_transform(self, Z):
+    def inverse_transform(self, Z, seq_len: int):
         """Reconstruct from latent space (numpy interface)"""
         self.eval()
         with torch.no_grad():
             Z_tensor = torch.FloatTensor(Z).to(self.device)
-            x = self.forward(Z_tensor, mode="denorm")
+            x = self.forward(Z_tensor, mode="denorm", seq_len=seq_len)
             return x.cpu().detach().numpy()
 
     def inverse_transform_torch(self, Z):
