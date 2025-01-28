@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 import copy
 import os
 from tqdm import tqdm
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
@@ -13,7 +14,9 @@ import torch
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import make_pipeline
 
+from dicl.utils.calibration import compute_ks_metric
 from dicl.utils.preprocessing import AxisScaler, AxisPCA, get_gpu_memory_stats
+from dicl.adapters import IdentityTransformer
 
 if TYPE_CHECKING:
     from dicl.icl.iclearner import ICLTrainer, ICLObject
@@ -29,6 +32,7 @@ class DICL:
         n_features: int,
         n_components: int,
         pca_in_preprocessing: bool = False,
+        scaler_in_preprocessing: bool = True,
     ):
         """
         Initialize the DICL model with the specified disentangler, model, and
@@ -50,17 +54,19 @@ class DICL:
         self.n_features = n_features
         self.n_components = n_components
 
-        if pca_in_preprocessing:
+        if pca_in_preprocessing and scaler_in_preprocessing:
             self.scaler = make_pipeline(
                 AxisScaler(MinMaxScaler(), axis=1),
                 AxisScaler(StandardScaler(), axis=1),
                 AxisPCA(n_components=n_features, axis=1),
             )
-        else:
+        elif scaler_in_preprocessing:
             self.scaler = make_pipeline(
                 AxisScaler(MinMaxScaler(), axis=1),
                 AxisScaler(StandardScaler(), axis=1),
             )
+        else:
+            self.scaler = IdentityTransformer()
 
         # self.disentangler = make_pipeline(self.scaler, disentangler)
         self.disentangler = disentangler
@@ -87,6 +93,8 @@ class DICL:
         max_grad_norm: float = 5.0,
         verbose: int = 0,
         seed: int = 13,
+        use_disentangler: bool = True,
+        logger=None,
     ):
         """Fine-tune the model on the given time series data
 
@@ -100,8 +108,16 @@ class DICL:
             verbose: verbosity level
         """
 
-        X = self.transform(X)
-        y = self.transform(y)
+        if use_disentangler:
+            direct_transform = self.disentangler.transform_torch
+            inverse_transform = self.disentangler.inverse_transform_torch
+            self.disentangler.base_projector_.eval()
+        else:
+            direct_transform = torch.nn.Identity()
+            inverse_transform = torch.nn.Identity()
+
+        X = self.scaler.fit_transform(X)
+        y = self.scaler.transform(y)
 
         self.iclearner.fine_tune(
             X=X,
@@ -112,6 +128,9 @@ class DICL:
             max_grad_norm=max_grad_norm,
             verbose=verbose,
             seed=seed,
+            inverse_transform=inverse_transform,
+            direct_transform=direct_transform,
+            logger=logger,
         )
 
     def transform(self, X: NDArray) -> NDArray:
@@ -124,7 +143,7 @@ class DICL:
         Returns:
             NDArray: Transformed data.
         """
-        return self.disentangler.transform(self.scaler.transform(X))
+        return self.disentangler.transform(self.scaler.fit_transform(X))
 
     def inverse_transform(self, X_transformed: NDArray) -> NDArray:
         """
@@ -141,7 +160,7 @@ class DICL:
         )
 
     def predict_multi_step(
-        self, X: NDArray, prediction_horizon: int, **kwargs
+        self, X: NDArray, prediction_horizon: int, n_samples: int = 10, **kwargs
     ) -> Tuple[NDArray, ...]:
         """
         Perform multi-step prediction for a given horizon.
@@ -167,19 +186,44 @@ class DICL:
         self.X = X
         self.prediction_horizon = prediction_horizon
 
-        # Step 1: Transform the time series
-        X_transformed = self.transform(X[:, :, :-prediction_horizon])
+        # train mode in order for dropout to be stochastic
+        if hasattr(self.disentangler.base_projector_, "train"):
+            self.disentangler.base_projector_.train()
 
-        # Step 2: Perform time series forecasting
-        self.iclearner.update_context(
-            time_series=copy.copy(X_transformed),
-            context_length=X_transformed.shape[-1],
-        )
+        all_predictions = []
+        for _ in range(n_samples):
+            # Step 1: Transform the time series (stochasticity is here)
+            X_transformed = self.transform(X[:, :, :-prediction_horizon])
 
-        self.icl_object: List["ICLObject"] = self.iclearner.predict_long_horizon(
-            prediction_horizon=prediction_horizon,
-            **kwargs,
-        )
+            # Step 2: Perform time series forecasting multiple times
+            self.iclearner.update_context(
+                time_series=copy.copy(X_transformed),
+                context_length=X_transformed.shape[-1],
+            )
+
+            self.icl_object: List["ICLObject"] = self.iclearner.predict_long_horizon(
+                prediction_horizon=prediction_horizon,
+                **kwargs,
+            )
+
+            predictions = []
+            for dim in range(self.n_components):
+                predictions.append(self.icl_object[dim].mean_arr)
+            all_predictions.append(predictions)
+
+        # Convert to numpy array for statistics
+        all_predictions = np.array(
+            all_predictions
+        )  # [n_samples, n_components, batch, horizon]
+
+        self.all_predictions = all_predictions
+
+        # Update ICL objects with sample statistics
+        for dim in range(self.n_components):
+            dim_predictions = all_predictions[:, dim]
+            self.icl_object[dim].mean_arr = np.mean(dim_predictions, axis=0)
+            self.icl_object[dim].mode_arr = np.mean(dim_predictions, axis=0)
+            self.icl_object[dim].sigma_arr = np.std(dim_predictions, axis=0)
 
         # Step 3: Inverse transform the predictions
         all_mean = []
@@ -204,7 +248,7 @@ class DICL:
 
         return self.mean, self.mode, self.lb, self.ub
 
-    def compute_metrics(self):
+    def compute_metrics(self, logdir: Optional[Path] = None):
         """
         Compute the prediction metrics such as MSE and KS test.
 
@@ -239,6 +283,23 @@ class DICL:
         metrics["scaled_mae"] = torch.nn.L1Loss()(
             torch.tensor(scaled_groundtruth), torch.tensor(scaled_mean)
         ).item()
+
+        # ------ KS -------
+        kss, ece, ks_quantiles = compute_ks_metric(
+            groundtruth=self.X[:, :, -self.prediction_horizon :],
+            all_predictions=self.all_predictions,
+            n_features=self.n_features,
+            inverse_transform=self.inverse_transform,
+        )
+
+        # metrics["perdim_ks"] = kss
+        metrics["ks"] = kss.mean()
+        metrics["ece"] = ece.mean()
+
+        if logdir:
+            np.save(logdir / "ks.npy", kss)
+            np.save(logdir / "ece.npy", ece)
+            np.save(logdir / "ks_quantiles.npy", ks_quantiles)
 
         return metrics
 
@@ -302,6 +363,244 @@ class DICL:
         plt.show()
 
     def adapter_supervised_fine_tuning(
+        self,
+        X_train,
+        y_train,
+        X_val=None,
+        y_val=None,
+        coeff_reconstruction=0.0,
+        n_epochs=300,
+        learning_rate=0.001,
+        batch_size=32,
+        max_patience=10,
+        device="cpu",
+        log_dir="logs/",
+        reverse=False,
+        verbose=0,
+        logger=None,
+    ):
+        if not os.path.exists(log_dir):
+            raise ValueError(f"Log directory {log_dir} does not exist")
+
+        writer = SummaryWriter(log_dir)
+
+        assert isinstance(
+            self.disentangler.base_projector_, torch.nn.Module
+        ), "Disentangler must be a PyTorch Module"
+
+        self.scaler.fit(np.concatenate([X_train, y_train], axis=-1))
+        X_scaled, y_scaled = (
+            self.scaler.transform(X_train),
+            self.scaler.transform(y_train),
+        )
+
+        # Create dataset
+        train_dataset = torch.utils.data.TensorDataset(
+            torch.tensor(X_scaled, dtype=torch.float32),
+            torch.tensor(y_scaled, dtype=torch.float32),
+        )
+
+        # Split into train and validation sets (80-20 split)
+        if (X_val is None) or (y_val is None):
+            train_size = int(0.8 * len(train_dataset))
+            val_size = len(train_dataset) - train_size
+            train_dataset, val_dataset = torch.utils.data.random_split(
+                train_dataset, [train_size, val_size]
+            )
+        else:
+            X_val_scaled, y_val_scaled = (
+                self.scaler.transform(X_val),
+                self.scaler.transform(y_val),
+            )
+            val_dataset = torch.utils.data.TensorDataset(
+                torch.tensor(X_val_scaled, dtype=torch.float32),
+                torch.tensor(y_val_scaled, dtype=torch.float32),
+            )
+            val_size = len(val_dataset)
+
+        # Create data loaders
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True
+        )
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset, batch_size=batch_size, shuffle=False
+        )
+
+        self.iclearner.model.eval()
+
+        def make_predictions(X_batch, y_batch):
+            X_batch_transformed = self.disentangler.transform_torch(X_batch)
+
+            self.iclearner.update_context(
+                time_series=X_batch_transformed,
+                context_length=X_batch_transformed.shape[-1],
+            )
+
+            icl_predictions = self.iclearner.predict_long_horizon(
+                prediction_horizon=y_batch.shape[-1],
+                batch_size=batch_size,
+                verbose=0,
+            )
+
+            all_means = []
+            for dim in range(self.n_components):
+                all_means.append(icl_predictions[dim].predictions)
+
+            predictions = self.disentangler.inverse_transform_torch(
+                torch.concat(all_means, axis=1)
+            )
+
+            return predictions
+
+        self.disentangler.base_projector_.train()
+
+        optimizer = torch.optim.Adam(
+            self.disentangler.base_projector_.parameters(), lr=learning_rate
+        )
+        # Initialize learning rate scheduler
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=5, verbose=True, min_lr=1e-6
+        )
+
+        for epoch in tqdm(
+            range(n_epochs),
+            desc="Training Epochs",
+            disable=not bool(verbose),
+        ):
+            # log gpu memory
+            gpu_stats = get_gpu_memory_stats()
+            for key, value in gpu_stats.items():
+                writer.add_scalar(f"gpu/{key}", value, epoch)
+
+            total_loss = 0
+            for batch_idx, (X_batch, y_batch) in enumerate(train_loader):
+                optimizer.zero_grad()
+
+                X_batch, y_batch = (
+                    X_batch.to(torch.device(device)),
+                    y_batch.to(torch.device(device)),
+                )
+
+                predictions = make_predictions(X_batch=X_batch, y_batch=y_batch)
+
+                criterion = torch.nn.MSELoss()
+                pred_loss = criterion(predictions, y_batch)
+
+                loss = pred_loss
+                if coeff_reconstruction > 0:
+                    # reconstruction loss
+                    reconstruction_loss = (
+                        self.disentangler.base_projector_.reconstruction_loss(
+                            X_batch.permute(0, 2, 1).reshape(-1, X_batch.shape[1])
+                        )
+                    )
+                    loss += coeff_reconstruction * reconstruction_loss
+                else:
+                    if hasattr(self.disentangler.base_projector_, "kl_loss"):
+                        kl_loss = self.disentangler.base_projector_.kl_loss(
+                            X_batch=X_batch
+                        )
+                        loss += kl_loss
+                        writer.add_scalar(
+                            "Loss/KL",
+                            kl_loss.item(),
+                            epoch * len(train_loader) + batch_idx,
+                        )
+
+                if reverse:
+                    loss = -loss
+
+                loss.backward()
+                # Log gradient norm of model parameters
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.disentangler.base_projector_.parameters(), float("inf")
+                )
+                writer.add_scalar(
+                    "Gradients/norm",
+                    grad_norm.item(),
+                    epoch * len(train_loader) + batch_idx,
+                )
+                optimizer.step()
+
+                total_loss += loss.item()
+
+                # Log batch loss
+                writer.add_scalar(
+                    "Loss/batch", loss.item(), epoch * len(train_loader) + batch_idx
+                )
+                if coeff_reconstruction > 0:
+                    writer.add_scalar(
+                        "Loss/batch_recon",
+                        reconstruction_loss.item(),
+                        epoch * len(train_loader) + batch_idx,
+                    )
+                writer.add_scalar(
+                    "Loss/batch_pred",
+                    pred_loss.item(),
+                    epoch * len(train_loader) + batch_idx,
+                )
+
+            avg_loss = total_loss * batch_size / len(train_dataset)
+            # Log epoch metrics
+            writer.add_scalar("Loss/training", avg_loss, epoch)
+            writer.add_scalar("Learning_rate", optimizer.param_groups[0]["lr"], epoch)
+
+            # Compute validation loss
+            val_loss = 0
+            with torch.no_grad():
+                for X_val, y_val in val_loader:
+                    X_val, y_val = (
+                        X_val.to(torch.device(device)),
+                        y_val.to(torch.device(device)),
+                    )
+                    val_predictions = make_predictions(X_batch=X_val, y_batch=y_val)
+                    val_loss += criterion(val_predictions, y_val).item()
+            val_loss = val_loss * batch_size / val_size
+            if reverse:
+                val_loss = -val_loss
+
+            # Log validation loss
+            writer.add_scalar("Loss/validation", val_loss, epoch)
+
+            # Use scheduler for learning rate adjustment based on validation loss
+            scheduler.step(val_loss)
+
+            # Early stopping based on validation loss
+            if epoch == 0:
+                best_val_loss = val_loss
+                patience_counter = 0
+                best_model_weights = copy.deepcopy(
+                    self.disentangler.base_projector_.state_dict()
+                )
+                best_epoch = epoch
+            else:
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                    best_model_weights = copy.deepcopy(
+                        self.disentangler.base_projector_.state_dict()
+                    )
+                    best_epoch = epoch
+                else:
+                    patience_counter += 1
+
+            if patience_counter >= max_patience:  # Early stopping patience
+                if logger:
+                    logger.info(f"Early stopping at epoch {epoch}")
+                else:
+                    print(f"Early stopping at epoch {epoch}")
+                break
+        if logger:
+            logger.info(f"Restoring weights from epoch {best_epoch}")
+        else:
+            print(f"Restoring weights from epoch {best_epoch}")
+        self.disentangler.base_projector_.load_state_dict(best_model_weights)
+        del best_model_weights
+        self.disentangler.base_projector_.eval()
+        writer.close()
+        return
+
+    def adapter_and_head_supervised_fine_tuning(
         self,
         X_train,
         y_train,
@@ -389,9 +688,12 @@ class DICL:
             return predictions
 
         self.disentangler.base_projector_.train()
+        self.iclearner.model.train()
 
         optimizer = torch.optim.Adam(
-            self.disentangler.base_projector_.parameters(), lr=learning_rate
+            list(self.disentangler.base_projector_.parameters())
+            + list(self.iclearner.model.parameters()),
+            lr=learning_rate,
         )
         # Initialize learning rate scheduler
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -412,6 +714,8 @@ class DICL:
 
             total_loss = 0
             for batch_idx, (X_batch, y_batch) in enumerate(train_loader):
+                self.disentangler.base_projector_.train()
+                self.iclearner.model.train()
                 optimizer.zero_grad()
 
                 X_batch, y_batch = (
@@ -443,8 +747,16 @@ class DICL:
                     self.disentangler.base_projector_.parameters(), float("inf")
                 )
                 writer.add_scalar(
-                    "Gradients/norm",
+                    "Gradients/norm(adapters)",
                     grad_norm.item(),
+                    epoch * len(train_loader) + batch_idx,
+                )
+                model_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.iclearner.model.head.parameters(), float("inf")
+                )
+                writer.add_scalar(
+                    "Gradients/norm(model)",
+                    model_grad_norm.item(),
                     epoch * len(train_loader) + batch_idx,
                 )
                 optimizer.step()
@@ -473,6 +785,8 @@ class DICL:
             writer.add_scalar("Learning_rate", optimizer.param_groups[0]["lr"], epoch)
 
             # Compute validation loss
+            self.disentangler.base_projector_.eval()
+            self.iclearner.model.eval()
             val_loss = 0
             with torch.no_grad():
                 for X_val, y_val in val_loader:
@@ -504,5 +818,6 @@ class DICL:
                     break
 
         self.disentangler.base_projector_.eval()
+        self.iclearner.model.eval()
         writer.close()
         return
