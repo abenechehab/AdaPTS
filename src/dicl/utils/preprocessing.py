@@ -144,6 +144,8 @@ class RevIN(nn.Module):
             x = self._normalize(x)
         elif mode == "denorm":
             x = self._denormalize(x)
+        elif mode == "denorm_mu_sigma":
+            x = self._denormalize_mu_sigma(x)
         else:
             raise NotImplementedError
         return x
@@ -174,6 +176,18 @@ class RevIN(nn.Module):
             x = x / (self.affine_weight + self.eps * self.eps)
         x = x * self.stdev
         x = x + self.mean
+        return x
+
+    def _denormalize_mu_sigma(self, x):
+        mu, logvar = x
+        if self.affine:
+            mu = mu - self.affine_bias
+            mu = mu / (self.affine_weight + self.eps * self.eps)
+            logvar = logvar - 2 * torch.log(self.affine_weight + self.eps * self.eps)
+        mu = mu * self.stdev
+        mu = mu + self.mean
+        logvar = logvar + 2 * torch.log(self.stdev)
+        x = (mu, logvar)
         return x
 
 
