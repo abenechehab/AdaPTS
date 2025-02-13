@@ -167,6 +167,7 @@ def ks_cdf(
     color: Any = "b",
     pot_cdf_uniform: bool = True,
     label: str = "",
+    color_uniform: str = "red",
 ):
     """
     Plots the cumulative distribution function (CDF) of the KS quantiles for a given
@@ -219,7 +220,10 @@ def ks_cdf(
     )
     if pot_cdf_uniform:
         ax.plot(
-            np.concatenate([[0], x]), np.concatenate([[0], cdfs]), "--", color="red"
+            np.concatenate([[0], x]),
+            np.concatenate([[0], cdfs]),
+            "--",
+            color=color_uniform,
         )
     ax.set_ylim([0, 1])
 
