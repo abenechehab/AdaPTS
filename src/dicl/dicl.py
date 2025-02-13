@@ -87,6 +87,8 @@ class DICL:
         self,
         X: NDArray[np.float32],  # input sequences
         y: NDArray[np.float32],  # target sequences
+        X_val: Optional[NDArray[np.float32]] = None,  # input sequences
+        y_val: Optional[NDArray[np.float32]] = None,  # target sequences
         n_epochs: int = 1,
         batch_size: int = 8,
         learning_rate: float = 1e-4,
@@ -122,6 +124,8 @@ class DICL:
         self.iclearner.fine_tune(
             X=X,
             y=y,
+            X_val=X_val,
+            y_val=y_val,
             n_epochs=n_epochs,
             batch_size=batch_size,
             learning_rate=learning_rate,
@@ -155,6 +159,11 @@ class DICL:
         Returns:
             NDArray: Data transformed back to the original space.
         """
+
+        if hasattr(self.disentangler.base_projector_, "likelihood"):
+            return self.scaler.inverse_transform(
+                self.disentangler.inverse_transform(X_transformed)[0]
+            )
         return self.scaler.inverse_transform(
             self.disentangler.inverse_transform(X_transformed)
         )
@@ -248,7 +257,7 @@ class DICL:
 
         return self.mean, self.mode, self.lb, self.ub
 
-    def compute_metrics(self, logdir: Optional[Path] = None):
+    def compute_metrics(self, calibration: bool = True, logdir: Optional[Path] = None):
         """
         Compute the prediction metrics such as MSE and KS test.
 
@@ -284,22 +293,23 @@ class DICL:
             torch.tensor(scaled_groundtruth), torch.tensor(scaled_mean)
         ).item()
 
-        # ------ KS -------
-        kss, ece, ks_quantiles = compute_ks_metric(
-            groundtruth=self.X[:, :, -self.prediction_horizon :],
-            all_predictions=self.all_predictions,
-            n_features=self.n_features,
-            inverse_transform=self.inverse_transform,
-        )
+        if calibration:
+            # ------ KS -------
+            kss, ece, ks_quantiles = compute_ks_metric(
+                groundtruth=self.X[:, :, -self.prediction_horizon :],
+                all_predictions=self.all_predictions,
+                n_features=self.n_features,
+                inverse_transform=self.inverse_transform,
+            )
 
-        # metrics["perdim_ks"] = kss
-        metrics["ks"] = kss.mean()
-        metrics["ece"] = ece.mean()
+            # metrics["perdim_ks"] = kss
+            metrics["ks"] = kss.mean()
+            metrics["ece"] = ece.mean()
 
-        if logdir:
-            np.save(logdir / "ks.npy", kss)
-            np.save(logdir / "ece.npy", ece)
-            np.save(logdir / "ks_quantiles.npy", ks_quantiles)
+            if logdir:
+                np.save(logdir / "ks.npy", kss)
+                np.save(logdir / "ece.npy", ece)
+                np.save(logdir / "ks_quantiles.npy", ks_quantiles)
 
         return metrics
 
@@ -483,8 +493,15 @@ class DICL:
 
                 predictions = make_predictions(X_batch=X_batch, y_batch=y_batch)
 
-                criterion = torch.nn.MSELoss()
-                pred_loss = criterion(predictions, y_batch)
+                if hasattr(self.disentangler.base_projector_, "likelihood"):
+                    mu, logvar = predictions
+                    predicted_dist = torch.distributions.Normal(
+                        mu, torch.exp(0.5 * logvar)
+                    )
+                    pred_loss = -predicted_dist.log_prob(y_batch).mean()
+                else:
+                    criterion = torch.nn.MSELoss()
+                    pred_loss = criterion(predictions, y_batch)
 
                 loss = pred_loss
                 if coeff_reconstruction > 0:
@@ -554,7 +571,14 @@ class DICL:
                         y_val.to(torch.device(device)),
                     )
                     val_predictions = make_predictions(X_batch=X_val, y_batch=y_val)
-                    val_loss += criterion(val_predictions, y_val).item()
+                    if hasattr(self.disentangler.base_projector_, "likelihood"):
+                        mu, logvar = val_predictions
+                        predicted_dist = torch.distributions.Normal(
+                            mu, torch.exp(0.5 * logvar)
+                        )
+                        val_loss += -predicted_dist.log_prob(y_val).mean().item()
+                    else:
+                        val_loss += criterion(val_predictions, y_val).item()
             val_loss = val_loss * batch_size / val_size
             if reverse:
                 val_loss = -val_loss
