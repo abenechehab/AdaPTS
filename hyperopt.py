@@ -15,10 +15,10 @@ from ray.train import RunConfig
 from ray.tune.schedulers import ASHAScheduler
 from ray.tune.search.hebo import HEBOSearch
 
-from dicl import adapters
-from dicl.dicl import DICL
-from dicl.icl import iclearner as icl
-from dicl.adapters import (
+from adapts import adapters
+from adapts.adapts import ADAPTS
+from adapts.icl import iclearner as icl
+from adapts.adapters import (
     SimpleAutoEncoder,
     LinearAutoEncoder,
     betaVAE,
@@ -31,7 +31,7 @@ from dicl.adapters import (
     likelihoodVAE,
     linearLikelihoodVAE,
 )
-from dicl.utils.main_script import (
+from adapts.utils.main_script import (
     load_moment_model,
     prepare_data,
     save_hyperopt_metrics_to_csv,
@@ -259,32 +259,32 @@ def train_adapter(
 
         # Reset model for each fold
         adapter = adapter_cls(**adapter_params).to(device)
-        disentangler = adapters.MultichannelProjector(
+        adapter = adapters.MultichannelProjector(
             num_channels=n_features,
             new_num_channels=n_components,
             patch_window_size=None,
             base_projector=adapter,
             device=device,
         )
-        dicl_model = DICL(
-            disentangler=disentangler,
+        adapts_model = ADAPTS(
+            adapter=adapter,
             iclearner=iclearner,
             n_features=n_features,
             n_components=n_components,
         )
 
         # Train on this fold
-        dicl_model.fine_tune_iclearner(
+        adapts_model.fine_tune_iclearner(
             X=X_train,
             y=y_train,
             batch_size=config["batch_size"],
             learning_rate=config["learning_rate"],
             verbose=0,
-            use_disentangler=False,
+            use_adapter=False,
             n_epochs=50,
             seed=seed,
         )
-        dicl_model.adapter_supervised_fine_tuning(
+        adapts_model.adapter_supervised_fine_tuning(
             X_fold_train,
             y_fold_train,
             X_val=X_fold_val,
@@ -295,11 +295,11 @@ def train_adapter(
         # Evaluate on validation fold
         with torch.no_grad():
             fold_time_series = np.concatenate([X_fold_val, y_fold_val], axis=-1)
-            _, _, _, _ = dicl_model.predict_multi_step(
+            _, _, _, _ = adapts_model.predict_multi_step(
                 X=fold_time_series,
                 prediction_horizon=forecasting_horizon,
             )
-            fold_metrics.append(dicl_model.compute_metrics())
+            fold_metrics.append(adapts_model.compute_metrics())
 
     # Calculate average metrics across folds
     metrics = {}
@@ -308,11 +308,11 @@ def train_adapter(
 
     # Final evaluation on test set using the last model
     with torch.no_grad():
-        _, _, _, _ = dicl_model.predict_multi_step(
+        _, _, _, _ = adapts_model.predict_multi_step(
             X=time_series_test,
             prediction_horizon=forecasting_horizon,
         )
-        test_metrics = dicl_model.compute_metrics(
+        test_metrics = adapts_model.compute_metrics(
             logdir=Path(train.get_context().get_trial_dir())
         )
 

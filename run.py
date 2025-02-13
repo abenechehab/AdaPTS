@@ -12,18 +12,18 @@ import tyro
 import numpy as np
 import torch
 
-# DICL
-from dicl import dicl, adapters
-from dicl.icl import iclearner as icl
-from dicl.utils.main_script import (
+# adapts
+from adapts import adapts, adapters
+from adapts.icl import iclearner as icl
+from adapts.utils.main_script import (
     save_metrics_to_csv,
     setup_logging,
     prepare_data,
     load_moment_model,
     load_moirai_model,
 )
-from dicl.utils.preprocessing import get_gpu_memory_stats
-from dicl.adapters import (
+from adapts.utils.preprocessing import get_gpu_memory_stats
+from adapts.adapters import (
     SimpleAutoEncoder,
     LinearAutoEncoder,
     betaVAE,
@@ -243,7 +243,7 @@ def main(args: Args):
             learning_rate = 0.001
             batch_size = 32
 
-        disentangler = adapters.MultichannelProjector(
+        adapter = adapters.MultichannelProjector(
             num_channels=n_features,
             new_num_channels=n_components,
             patch_window_size=None,
@@ -260,8 +260,8 @@ def main(args: Args):
             forecast_horizon=args.forecast_horizon,
         )
 
-        DICL = dicl.DICL(
-            disentangler=disentangler,
+        adapts_model = adapts.ADAPTS(
+            adapter=adapter,
             iclearner=iclearner,
             n_features=n_features,
             n_components=n_components,
@@ -275,7 +275,7 @@ def main(args: Args):
         next_time_cp = time.time()
         os.makedirs(Path(log_dir) / f"n_comp_{n_components}", exist_ok=True)
         if args.supervised == "True":
-            DICL.adapter_supervised_fine_tuning(
+            adapts_model.adapter_supervised_fine_tuning(
                 X_train=X_train,
                 y_train=y_train,
                 X_val=X_val,
@@ -289,7 +289,7 @@ def main(args: Args):
                 logger=logger,
             )
         elif args.supervised == "full":
-            DICL.adapter_and_head_supervised_fine_tuning(
+            adapts_model.adapter_and_head_supervised_fine_tuning(
                 X_train=X_train,
                 y_train=y_train,
                 X_val=X_val,
@@ -301,13 +301,13 @@ def main(args: Args):
                 verbose=1,
             )
         elif args.supervised == "ft_then_supervised":
-            DICL.fine_tune_iclearner(
+            adapts_model.fine_tune_iclearner(
                 X=X_train,
                 y=y_train,
                 batch_size=batch_size,
                 learning_rate=learning_rate,
                 verbose=1,
-                use_disentangler=False,
+                use_adapter=False,
                 n_epochs=args.n_epochs_fine_tuning,
                 logger=logger,
                 seed=args.seed,
@@ -315,7 +315,7 @@ def main(args: Args):
             logger.info(
                 f"[{n_components}/{start}:{end}] Done fine tuning, now training adapter"
             )
-            DICL.adapter_supervised_fine_tuning(
+            adapts_model.adapter_supervised_fine_tuning(
                 X_train=X_train,
                 y_train=y_train,
                 X_val=X_val,
@@ -329,20 +329,20 @@ def main(args: Args):
                 logger=logger,
             )
         elif args.supervised == "bilevel":
-            DICL.fine_tune_iclearner(
+            adapts_model.fine_tune_iclearner(
                 X=X_train,
                 y=y_train,
                 batch_size=batch_size,
                 learning_rate=learning_rate,
                 verbose=1,
-                use_disentangler=False,
+                use_adapter=False,
                 n_epochs=args.n_epochs_fine_tuning,
                 logger=logger,
             )
             logger.info(
                 f"[{n_components}/{start}:{end}] Done fine tuning, now training adapter"
             )
-            DICL.adapter_supervised_fine_tuning(
+            adapts_model.adapter_supervised_fine_tuning(
                 X_train=X_train,
                 y_train=y_train,
                 X_val=X_val,
@@ -359,36 +359,36 @@ def main(args: Args):
                 f"[{n_components}/{start}:{end}] Done training adapter, now fine "
                 "tuning again ;)"
             )
-            DICL.fine_tune_iclearner(
+            adapts_model.fine_tune_iclearner(
                 X=X_train,
                 y=y_train,
                 batch_size=batch_size,
                 learning_rate=learning_rate,
                 verbose=1,
-                use_disentangler=True,
+                use_adapter=True,
                 n_epochs=50,
                 logger=logger,
             )
         elif args.supervised == "ft":
-            DICL.fine_tune_iclearner(
+            adapts_model.fine_tune_iclearner(
                 X=X_train,
                 y=y_train,
                 batch_size=batch_size,
                 learning_rate=learning_rate,
                 verbose=1,
-                use_disentangler=False,
+                use_adapter=False,
                 n_epochs=args.n_epochs_fine_tuning,
                 logger=logger,
             )
-            DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
+            adapts_model.fit_adapter(X=np.concatenate([X_train, X_val], axis=0))
         elif args.supervised == "unsupervised":
-            DICL.fine_tune_iclearner(
+            adapts_model.fine_tune_iclearner(
                 X=X_train,
                 y=y_train,
                 batch_size=batch_size,
                 learning_rate=learning_rate,
                 verbose=1,
-                use_disentangler=False,
+                use_adapter=False,
                 n_epochs=50,
                 logger=logger,
                 seed=args.seed,
@@ -396,14 +396,14 @@ def main(args: Args):
             logger.info(
                 f"[{n_components}/{start}:{end}] Done fine tuning, now training adapter"
             )
-            DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
+            adapts_model.fit_adapter(X=np.concatenate([X_train, X_val], axis=0))
         elif args.supervised == "False":
-            DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
+            adapts_model.fit_adapter(X=np.concatenate([X_train, X_val], axis=0))
         else:
             raise ValueError(f"Invalid supervised argument: {args.supervised}")
         if args.adapter and args.adapter not in ["pca"]:
             torch.save(
-                DICL.disentangler.base_projector_,
+                adapts_model.adapter.base_projector_,
                 Path(log_dir) / f"n_comp_{n_components}/" / "adapter.pt",
             )
 
@@ -414,7 +414,7 @@ def main(args: Args):
         next_time_cp = time.time()
 
         with torch.no_grad():
-            _, _, _, _ = DICL.predict_multi_step(
+            _, _, _, _ = adapts_model.predict_multi_step(
                 X=time_series,
                 prediction_horizon=args.forecast_horizon,
                 batch_size=args.inference_batch_size,
@@ -427,7 +427,9 @@ def main(args: Args):
         )
         next_time_cp = time.time()
 
-        metrics = DICL.compute_metrics(logdir=Path(log_dir) / f"n_comp_{n_components}")
+        metrics = adapts_model.compute_metrics(
+            logdir=Path(log_dir) / f"n_comp_{n_components}"
+        )
         logger.info(
             f"[{n_components}/{start}:{end}] metrics [mse={metrics['mse']},"
             f"mae={metrics['mae']}] computed in {time.time() - next_time_cp:.2f} sec"
@@ -457,7 +459,7 @@ def main(args: Args):
         )
 
         # clean memory
-        del disentangler, iclearner, DICL
+        del adapter, iclearner, adapts_model
 
         gpu_stats = get_gpu_memory_stats()
         for gpu_id in gpu_stats:

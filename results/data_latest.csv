@@ -2717,3 +2717,9 @@ Illness,Salesforce/moirai-1.1-R-large,,7,7,False,False,False,512,24,44.633764266
 Illness,Salesforce/moirai-1.1-R-large,,7,7,False,False,False,512,24,44.63376426696777,21490,scaled_mae,0.5565673392073073,141
 Illness,Salesforce/moirai-1.1-R-large,,7,7,False,False,False,512,24,44.63376426696777,21490,ks,0.4914005602240897,141
 Illness,Salesforce/moirai-1.1-R-large,,7,7,False,False,False,512,24,44.63376426696777,21490,ece,0.22830919426594168,141
+Illness,Salesforce/moirai-1.1-R-small,pca,7,7,False,False,False,512,24,14.137393712997437,30631,mse,4.192501473710203,141
+Illness,Salesforce/moirai-1.1-R-small,pca,7,7,False,False,False,512,24,14.137393712997437,30631,mae,1.4026682159498567,141
+Illness,Salesforce/moirai-1.1-R-small,pca,7,7,False,False,False,512,24,14.137393712997437,30631,scaled_mse,2.7339783896754515,141
+Illness,Salesforce/moirai-1.1-R-small,pca,7,7,False,False,False,512,24,14.137393712997437,30631,scaled_mae,1.1979767025323829,141
+Illness,Salesforce/moirai-1.1-R-small,pca,7,7,False,False,False,512,24,14.137393712997437,30631,ks,0.5149789915966387,141
+Illness,Salesforce/moirai-1.1-R-small,pca,7,7,False,False,False,512,24,14.137393712997437,30631,ece,0.23971131982204646,141
