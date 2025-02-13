@@ -1,0 +1,3 @@
+python run.py --forecast_horizon 24 --model_name "AutonLab/MOMENT-1-small" --context_length 512 --seed $RANDOM --device "cuda:5" --dataset_name "Illness" --adapter "dropoutLinearAE" --supervised "ft_then_supervised"
+python run.py --forecast_horizon 24 --model_name "AutonLab/MOMENT-1-small" --context_length 512 --seed $RANDOM --device "cuda:5" --dataset_name "Illness" --adapter "dropoutLinearAE" --supervised "ft_then_supervised"
+python run.py --forecast_horizon 24 --model_name "AutonLab/MOMENT-1-small" --context_length 512 --seed $RANDOM --device "cuda:5" --dataset_name "Illness" --adapter "dropoutLinearAE" --supervised "ft_then_supervised"
