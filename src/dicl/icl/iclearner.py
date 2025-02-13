@@ -432,18 +432,21 @@ class MomentICLTrainer(ICLTrainer):
     def predict_long_horizon(
         self,
         prediction_horizon: int,
-        batch_size: int = 512,
+        batch_size: int = 128,
         native_multivariate: bool = False,
         verbose: int = 1,
     ):
         """Multi-step prediction using MOMENT model"""
         # Get device from model
+        self.model.eval()
         device = next(self.model.parameters()).device
         if native_multivariate:
             # Process all features together
             tensor_ts = torch.cat(
                 [
-                    torch.from_numpy(self.icl_object[dim].time_series)
+                    self.icl_object[dim].time_series
+                    if isinstance(self.icl_object[dim].time_series, torch.Tensor)
+                    else torch.from_numpy(self.icl_object[dim].time_series)
                     .unsqueeze(1)
                     .float()
                     .to(device)
@@ -456,18 +459,14 @@ class MomentICLTrainer(ICLTrainer):
             for i in tqdm(range(0, tensor_ts.shape[0], batch_size), desc="batch"):
                 batch_end = min(i + batch_size, tensor_ts.shape[0])
                 batch_ts = tensor_ts[i:batch_end]
-                batch_predictions = (
-                    self.model(x_enc=batch_ts).forecast.cpu().detach().numpy()
-                )
+                batch_predictions = self.model(x_enc=batch_ts).forecast
                 all_predictions.append(batch_predictions)
 
             # Stack all batches together
-            predictions = np.concatenate(all_predictions, axis=0)
+            predictions = torch.concatenate(all_predictions, axis=0)
 
             for dim in range(self.n_features):
-                self.icl_object[dim].predictions = np.expand_dims(
-                    predictions[:, dim, :], axis=1
-                )
+                self.icl_object[dim].predictions = predictions[:, dim, :].unsqueeze(1)
         else:
             for dim in tqdm(
                 range(self.n_features),
@@ -499,6 +498,8 @@ class MomentICLTrainer(ICLTrainer):
         self,
         X: NDArray[np.float32],  # input sequences
         y: NDArray[np.float32],  # target sequences
+        X_val: Optional[NDArray[np.float32]] = None,
+        y_val: Optional[NDArray[np.float32]] = None,
         n_epochs: int = 50,
         batch_size: int = 8,
         learning_rate: float = 1e-4,
@@ -535,11 +536,17 @@ class MomentICLTrainer(ICLTrainer):
         tensor_y = torch.from_numpy(y).float()
         dataset = torch.utils.data.TensorDataset(tensor_X, tensor_y)
 
-        train_size = int(0.9 * len(dataset))
-        val_size = len(dataset) - train_size
-        train_dataset, val_dataset = torch.utils.data.random_split(
-            dataset, [train_size, val_size]
-        )
+        if (X_val is not None) and (y_val is not None):
+            tensor_X_val = torch.from_numpy(X_val).float()
+            tensor_y_val = torch.from_numpy(y_val).float()
+            val_dataset = torch.utils.data.TensorDataset(tensor_X_val, tensor_y_val)
+            train_dataset = dataset
+        else:
+            train_size = int(0.9 * len(dataset))
+            val_size = len(dataset) - train_size
+            train_dataset, val_dataset = torch.utils.data.random_split(
+                dataset, [train_size, val_size]
+            )
 
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=batch_size, shuffle=True
@@ -697,48 +704,92 @@ class MoiraiICLTrainer(ICLTrainer):
     def compute_statistics(self):
         """Compute statistics on predictions"""
         for dim in range(self.n_features):
-            # MOMENT provides point estimates, so mean=mode=prediction, sigma=0
+            # MOIRAI provides multiple samples in dim=1
             preds = self.icl_object[dim].predictions
-            self.icl_object[dim].mean_arr = preds.cpu().detach().numpy()
-            self.icl_object[dim].mode_arr = preds.cpu().detach().numpy()
-            self.icl_object[dim].sigma_arr = np.zeros_like(preds.cpu().detach().numpy())
+            mean_preds = preds.mean(axis=1).unsqueeze(1).cpu().detach().numpy()
+            self.icl_object[dim].mean_arr = mean_preds
+            # TODO: set mode here
+            self.icl_object[dim].mode_arr = mean_preds
+            self.icl_object[dim].sigma_arr = (
+                preds.mean(axis=1).unsqueeze(1).cpu().detach().numpy().std(axis=1)
+            )
+            self.icl_object[dim].predictions = preds.median(axis=1).values.unsqueeze(1)
         return self.icl_object
 
     def predict_long_horizon(
         self,
         prediction_horizon: int,
         batch_size: int = 1024,
+        native_multivariate: bool = True,
         verbose: int = 1,
     ):
         """Multi-step prediction using Moirai model"""
         self.model.eval()
         # Get device from model
         device = next(self.model.parameters()).device
-        for dim in range(self.n_features):
-            ts = self.icl_object[dim].time_series
-            tensor_ts = ts if isinstance(ts, torch.Tensor) else torch.from_numpy(ts)
-            tensor_ts = tensor_ts.float().to(device)
-            # Time series values. Shape: (batch, time, variate)
-            tensor_ts = tensor_ts.reshape((self.batch_size, self.context_length, 1))
+        if native_multivariate:
+            # Process all features together. Shape: (batch, time, variate)
+            tensor_ts = torch.cat(
+                [
+                    self.icl_object[dim].time_series.unsqueeze(-1).float().to(device)
+                    if isinstance(self.icl_object[dim].time_series, torch.Tensor)
+                    else torch.from_numpy(self.icl_object[dim].time_series)
+                    .unsqueeze(-1)
+                    .float()
+                    .to(device)
+                    for dim in range(self.n_features)
+                ],
+                axis=-1,
+            )
             # Process in batches to avoid memory issues
             all_predictions = []
             for i in tqdm(
-                range(0, self.batch_size, batch_size), desc="inference batch"
+                range(0, self.batch_size, batch_size),
+                desc="inference batch",
+                disable=not bool(verbose),
             ):
                 batch_end = min(i + batch_size, self.batch_size)
                 batch_ts = tensor_ts[i:batch_end]
-
                 batch_predictions = self.model(
                     past_target=batch_ts,
                     past_observed_target=torch.ones_like(batch_ts, dtype=torch.bool),
-                    past_is_pad=torch.zeros_like(batch_ts, dtype=torch.bool).squeeze(
-                        -1
-                    ),
+                    past_is_pad=torch.zeros_like(batch_ts, dtype=torch.bool)[:, :, 0],
                 )
                 all_predictions.append(batch_predictions)
 
-            predictions = torch.concat(all_predictions, axis=0)
-            self.icl_object[dim].predictions = predictions
+            # Stack all batches together
+            predictions = torch.concatenate(all_predictions, axis=0)
+
+            for dim in range(self.n_features):
+                self.icl_object[dim].predictions = predictions[:, :, :, dim]
+        else:
+            for dim in range(self.n_features):
+                ts = self.icl_object[dim].time_series
+                tensor_ts = ts if isinstance(ts, torch.Tensor) else torch.from_numpy(ts)
+                tensor_ts = tensor_ts.float().to(device)
+                # Time series values. Shape: (batch, time, variate)
+                tensor_ts = tensor_ts.reshape((self.batch_size, self.context_length, 1))
+                # Process in batches to avoid memory issues
+                all_predictions = []
+                for i in tqdm(
+                    range(0, self.batch_size, batch_size),
+                    desc="inference batch",
+                    disable=not bool(verbose),
+                ):
+                    batch_end = min(i + batch_size, self.batch_size)
+                    batch_ts = tensor_ts[i:batch_end]
+                    batch_predictions = self.model(
+                        past_target=batch_ts,
+                        past_observed_target=torch.ones_like(
+                            batch_ts, dtype=torch.bool
+                        ),
+                        past_is_pad=torch.zeros_like(
+                            batch_ts, dtype=torch.bool
+                        ).squeeze(-1),
+                    )
+                    all_predictions.append(batch_predictions)
+                predictions = torch.concat(all_predictions, axis=0)
+                self.icl_object[dim].predictions = predictions
         return self.compute_statistics()
 
 
