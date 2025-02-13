@@ -164,8 +164,26 @@ class MultichannelProjector:
                 context_length=context_length,
                 forecast_horizon=forecast_horizon,
             ).to(torch.device(device))
+        elif base_projector == "lVAE":
+            self.base_projector_ = likelihoodVAE(
+                n_components=n_components,
+                input_dim=self.num_channels,
+                device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
+            ).to(torch.device(device))
         elif base_projector == "linearVAE":
             self.base_projector_ = betaLinearVAE(
+                n_components=n_components,
+                input_dim=self.num_channels,
+                device=device,
+                use_revin=use_revin,
+                context_length=context_length,
+                forecast_horizon=forecast_horizon,
+            ).to(torch.device(device))
+        elif base_projector == "linearlVAE":
+            self.base_projector_ = linearLikelihoodVAE(
                 n_components=n_components,
                 input_dim=self.num_channels,
                 device=device,
@@ -286,6 +304,11 @@ class MultichannelProjector:
             )
         else:
             X_inverse_transformed = self.base_projector_.inverse_transform(X_2d)
+        if hasattr(self.base_projector_, "likelihood"):
+            mu, logvar = X_inverse_transformed
+            mu = mu.reshape([num_samples, seq_len, self.num_channels])
+            logvar = logvar.reshape([num_samples, seq_len, self.num_channels])
+            return np.swapaxes(mu, 1, 2), np.swapaxes(logvar, 1, 2)
         X_inverse_transformed = X_inverse_transformed.reshape(
             [num_samples, seq_len, self.num_channels]
         )
@@ -310,6 +333,11 @@ class MultichannelProjector:
         )
 
         X_inverse_transformed = self.base_projector_.inverse_transform_torch(X_2d)
+        if hasattr(self.base_projector_, "likelihood"):
+            mu, logvar = X_inverse_transformed
+            mu = mu.reshape([num_samples, seq_len, self.num_channels])
+            logvar = logvar.reshape([num_samples, seq_len, self.num_channels])
+            return torch.transpose(mu, 1, 2), torch.transpose(logvar, 1, 2)
         X_inverse_transformed = X_inverse_transformed.reshape(
             [num_samples, seq_len, self.num_channels]
         )
@@ -521,7 +549,7 @@ class DropoutLinearAutoEncoder(nn.Module):
         n_components: int,
         context_length: int,
         forecast_horizon: int,
-        p: float = 0.4,
+        p: float = 0.1,
         device: str = "cpu",
         use_revin: bool = False,
     ):
@@ -1290,7 +1318,7 @@ class betaVAE(nn.Module):
         forecast_horizon: int,
         num_layers: int = 2,
         hidden_dim: int = 128,
-        beta: float = 0.5,
+        beta: float = 1.0,
         device: str = "cpu",
         use_revin: bool = False,
     ):
@@ -1431,7 +1459,7 @@ class betaVAE(nn.Module):
             X_batch = self.revin(
                 X_batch.reshape(-1, self.context_length, self.input_dim),
                 mode="norm",
-            ).reshape(-1, self.n_components)
+            ).reshape(-1, self.input_dim)
         encoding = self.encoder(X_batch)
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         z = self.reparameterize(mu, logvar)
@@ -1452,8 +1480,8 @@ class betaVAE(nn.Module):
             X_batch = self.revin(
                 X_batch.reshape(-1, self.context_length, self.input_dim),
                 mode="norm",
-            ).reshape(-1, self.n_components)
-        encoding = self.encoder(X_batch)
+            )
+        encoding = self.encoder(X_batch.reshape(-1, self.input_dim))
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
         return self.beta * kl_loss
@@ -1674,7 +1702,7 @@ class betaLinearVAE(nn.Module):
             X_batch = self.revin(
                 X_batch.reshape(-1, input_seq_len, self.input_dim),
                 mode="norm",
-            ).reshape(-1, self.n_components)
+            ).reshape(-1, self.input_dim)
         encoding = self.encoder(X_batch)
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         z = self.reparameterize(mu, logvar)
@@ -1695,8 +1723,8 @@ class betaLinearVAE(nn.Module):
             X_batch = self.revin(
                 X_batch.reshape(-1, self.context_length, self.input_dim),
                 mode="norm",
-            ).reshape(-1, self.n_components)
-        encoding = self.encoder(X_batch)
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(X_batch.reshape(-1, self.input_dim))
         mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
         kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
         return self.beta * kl_loss
@@ -2239,3 +2267,466 @@ class JustRevIn(nn.Module):
     def reconstruction_loss(self, X_batch):
         """Compute reconstruction loss"""
         return torch.tensor(0.0, device=self.device)
+
+    def fit(self, X, y=None):
+        return self
+
+
+class likelihoodVAE(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        n_components: int,
+        context_length: int,
+        forecast_horizon: int,
+        num_layers: int = 2,
+        hidden_dim: int = 128,
+        beta: float = 0.5,
+        device: str = "cpu",
+        use_revin: bool = False,
+        fixed_logvar: Optional[float] = 0.5,
+    ):
+        """
+        Initialize Variational AutoEncoder for feature space projection.
+
+        Args:
+        input_dim: Input dimension
+        n_components: Desired output dimension (latent space)
+        num_layers: Number of layers in encoder and decoder
+        hidden_dim: Number of neurons in hidden layers
+        fixed_logvar: If not None, use this fixed value for logvar after decoder
+        """
+        super().__init__()
+
+        self.device = torch.device(device)
+        self.beta = beta
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+        self.n_components = n_components
+        self.input_dim = input_dim
+        self.likelihood = True
+        self.fixed_logvar = fixed_logvar
+
+        # Build encoder layers
+        self.encoder = nn.Sequential()
+        self.encoder.add_module("layer0", nn.Linear(input_dim, hidden_dim))
+        self.encoder.add_module("layer0-bn", nn.BatchNorm1d(int(hidden_dim)))
+        self.encoder.add_module("layer0-act", nn.LeakyReLU())
+        for i in range(1, num_layers):
+            self.encoder.add_module(f"layer{i}", nn.Linear(hidden_dim, hidden_dim))
+            self.encoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
+            self.encoder.add_module(f"layer{i}-act", nn.LeakyReLU())
+
+        # Build decoder layers
+        self.decoder = nn.Sequential()
+        self.decoder.add_module("layer0", nn.Linear(n_components, hidden_dim))
+        self.decoder.add_module("layer0-bn", nn.BatchNorm1d(int(hidden_dim)))
+        self.decoder.add_module("layer0-act", nn.LeakyReLU())
+        for i in range(1, num_layers):
+            self.decoder.add_module(f"layer{i}", nn.Linear(hidden_dim, hidden_dim))
+            self.decoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
+            self.decoder.add_module(f"layer{i}-act", nn.LeakyReLU())
+        self.decoder.add_module(
+            f"layer{num_layers+1}", nn.Linear(hidden_dim, input_dim)
+        )
+        self.decoder.add_module(f"layer{num_layers+1}-act", nn.Tanh())
+
+        # Build latent space layers
+        self.latent_mu = nn.Linear(hidden_dim, n_components)
+        self.latent_logvar = nn.Linear(hidden_dim, n_components)
+
+        # Build likelihood model
+        self.mu = nn.Linear(input_dim, input_dim)
+        if fixed_logvar is None:
+            self.logvar = nn.Linear(input_dim, input_dim)
+        else:
+            self.register_buffer(
+                "fixed_logvar_tensor", torch.full((1, input_dim), fixed_logvar)
+            )
+
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
+    def reparameterize(self, mu, logvar):
+        """Reparameterization trick to sample from N(mu, var)"""
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        """Forward pass through autoencoder"""
+        if self.use_revin:
+            revin_input = x.reshape(-1, self.context_length, self.input_dim)
+            after_encoding = self.encoder(
+                self.revin(revin_input, mode="norm").reshape(-1, self.input_dim)
+            )
+            mu, logvar = (
+                self.latent_mu(after_encoding),
+                self.latent_logvar(after_encoding),
+            )
+            z = self.reparameterize(mu, logvar)
+            after_decoding = self.decoder(z)
+            reverse_revin_input = after_decoding.reshape(
+                -1, self.context_length, self.input_dim
+            )
+            return self.revin(
+                reverse_revin_input,
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(x)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        z = self.reparameterize(mu, logvar)
+        return self.decoder(z)
+
+    def transform(self, X, seq_len: int):
+        """Project data to latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                X_tensor = self.revin(
+                    X_tensor.reshape(-1, seq_len, self.input_dim),
+                    mode="norm",
+                ).reshape(-1, self.input_dim)
+            encoding = self.encoder(X_tensor)
+            mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+            return self.reparameterize(mu, logvar).cpu().detach().numpy()
+
+    def transform_torch(self, X):
+        """Project data to latent space"""
+        if self.use_revin:
+            X = self.revin(
+                X.reshape(-1, self.context_length, self.input_dim), mode="norm"
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(X)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        return self.reparameterize(mu, logvar)
+
+    def inverse_transform(self, X, seq_len: int):
+        """Reconstruct from latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                decoder_output = self.decoder(X_tensor)
+                mu_pred = self.mu(decoder_output)
+                logvar_pred = (
+                    self.fixed_logvar_tensor.expand(mu_pred.shape)
+                    if self.fixed_logvar is not None
+                    else self.logvar(decoder_output)
+                )
+                mu_pred, logvar_pred = self.revin(
+                    (
+                        mu_pred.reshape(-1, seq_len, self.input_dim),
+                        logvar_pred.reshape(-1, seq_len, self.input_dim),
+                    ),
+                    mode="denorm_mu_sigma",
+                )
+                return (
+                    mu_pred.cpu().detach().numpy().reshape(-1, self.input_dim),
+                    logvar_pred.cpu().detach().numpy().reshape(-1, self.input_dim),
+                )
+            decoder_output = self.decoder(X_tensor)
+            mu_pred = self.mu(decoder_output)
+            logvar_pred = (
+                self.fixed_logvar_tensor.expand(mu_pred.shape)
+                if self.fixed_logvar is not None
+                else self.logvar(decoder_output)
+            )
+            return mu_pred.cpu().detach().numpy(), logvar_pred.cpu().detach().numpy()
+
+    def inverse_transform_torch(self, X):
+        """Reconstruct from latent space"""
+        if self.use_revin:
+            decoder_output = self.decoder(X)
+            mu_pred = self.mu(decoder_output)
+            logvar_pred = (
+                self.fixed_logvar_tensor.expand(mu_pred.shape)
+                if self.fixed_logvar is not None
+                else self.logvar(decoder_output)
+            )
+            mu_pred, logvar_pred = self.revin(
+                (
+                    mu_pred.reshape(-1, self.forecast_horizon, self.input_dim),
+                    logvar_pred.reshape(-1, self.forecast_horizon, self.input_dim),
+                ),
+                mode="denorm_mu_sigma",
+            )
+            return mu_pred.reshape(-1, self.input_dim), logvar_pred.reshape(
+                -1, self.input_dim
+            )
+        decoder_output = self.decoder(X)
+        mu_pred = self.mu(decoder_output)
+        logvar_pred = (
+            self.fixed_logvar_tensor.expand(mu_pred.shape)
+            if self.fixed_logvar is not None
+            else self.logvar(decoder_output)
+        )
+        return mu_pred, logvar_pred
+
+    def reconstruction_loss(self, X_batch):
+        """Compute reconstruction loss"""
+        X_batch = X_batch.to(self.device)
+        if self.use_revin:
+            X_batch = self.revin(
+                X_batch.reshape(-1, self.context_length, self.input_dim),
+                mode="norm",
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(X_batch)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        z = self.reparameterize(mu, logvar)
+        after_decoding = self.decoder(z)
+        mu_pred = self.mu(after_decoding)
+        logvar_pred = (
+            self.fixed_logvar_tensor.expand(mu_pred.shape)
+            if self.fixed_logvar is not None
+            else self.logvar(after_decoding)
+        )
+        if self.use_revin:
+            mu_pred, logvar_pred = self.revin(
+                (
+                    mu_pred.reshape(-1, self.forecast_horizon, self.input_dim),
+                    logvar_pred.reshape(-1, self.forecast_horizon, self.input_dim),
+                ),
+                mode="denorm_mu_sigma",
+            ).reshape(-1, self.input_dim)
+        predicted_dist = torch.distributions.Normal(
+            mu_pred, torch.exp(0.5 * logvar_pred)
+        )
+        reconstruction_loss = -predicted_dist.log_prob(X_batch).mean()
+        kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        return reconstruction_loss + self.beta * kl_loss
+
+    def kl_loss(self, X_batch):
+        """Compute KL loss"""
+        X_batch = X_batch.to(self.device)
+        if self.use_revin:
+            X_batch = self.revin(
+                X_batch.reshape(-1, self.context_length, self.input_dim),
+                mode="norm",
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(X_batch)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        return self.beta * kl_loss
+
+
+class linearLikelihoodVAE(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        n_components: int,
+        context_length: int,
+        forecast_horizon: int,
+        beta: float = 1.0,
+        device: str = "cpu",
+        use_revin: bool = False,
+        fixed_logvar: Optional[float] = None,
+    ):
+        """
+        Initialize Variational AutoEncoder for feature space projection.
+
+        Args:
+        input_dim: Input dimension
+        n_components: Desired output dimension (latent space)
+        num_layers: Number of layers in encoder and decoder
+        hidden_dim: Number of neurons in hidden layers
+        fixed_logvar: If not None, use this fixed value for logvar after decoder
+        """
+        super().__init__()
+
+        self.device = torch.device(device)
+        self.beta = beta
+        self.context_length = context_length
+        self.forecast_horizon = forecast_horizon
+        self.n_components = n_components
+        self.input_dim = input_dim
+        self.likelihood = True
+        self.fixed_logvar = fixed_logvar
+
+        # Build encoder layers
+        self.encoder = nn.Identity()
+
+        # Build decoder layers
+        self.decoder = nn.Identity()
+
+        # Build latent space layers
+        self.latent_mu = nn.Linear(input_dim, n_components)
+        self.latent_logvar = nn.Linear(input_dim, n_components)
+
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
+        # Build likelihood model
+        self.mu = nn.Linear(n_components, input_dim)
+        if fixed_logvar is None:
+            self.logvar = nn.Linear(n_components, input_dim)
+        else:
+            self.register_buffer(
+                "fixed_logvar_tensor", torch.full((1, input_dim), fixed_logvar)
+            )
+
+        self.use_revin = use_revin
+        if use_revin:
+            self.revin = RevIN(num_features=input_dim)
+
+    def reparameterize(self, mu, logvar):
+        """Reparameterization trick to sample from N(mu, var)"""
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        """Forward pass through autoencoder"""
+        if self.use_revin:
+            revin_input = x.reshape(-1, self.context_length, self.input_dim)
+            after_encoding = self.encoder(
+                self.revin(revin_input, mode="norm").reshape(-1, self.input_dim)
+            )
+            mu, logvar = (
+                self.latent_mu(after_encoding),
+                self.latent_logvar(after_encoding),
+            )
+            z = self.reparameterize(mu, logvar)
+            after_decoding = self.decoder(z)
+            reverse_revin_input = after_decoding.reshape(
+                -1, self.context_length, self.input_dim
+            )
+            return self.revin(
+                reverse_revin_input,
+                mode="denorm",
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(x)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        z = self.reparameterize(mu, logvar)
+        return self.decoder(z)
+
+    def transform(self, X, seq_len: int):
+        """Project data to latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                X_tensor = self.revin(
+                    X_tensor.reshape(-1, seq_len, self.input_dim),
+                    mode="norm",
+                ).reshape(-1, self.input_dim)
+            encoding = self.encoder(X_tensor)
+            mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+            return self.reparameterize(mu, logvar).cpu().detach().numpy()
+
+    def transform_torch(self, X):
+        """Project data to latent space"""
+        if self.use_revin:
+            X = self.revin(
+                X.reshape(-1, self.context_length, self.input_dim), mode="norm"
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(X)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        return self.reparameterize(mu, logvar)
+
+    def inverse_transform(self, X, seq_len: int):
+        """Reconstruct from latent space"""
+        with torch.no_grad():
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            if self.use_revin:
+                decoder_output = self.decoder(X_tensor)
+                mu_pred = self.mu(decoder_output)
+                logvar_pred = (
+                    self.fixed_logvar_tensor.expand(mu_pred.shape)
+                    if self.fixed_logvar is not None
+                    else self.logvar(decoder_output)
+                )
+                mu_pred, logvar_pred = self.revin(
+                    (
+                        mu_pred.reshape(-1, seq_len, self.input_dim),
+                        logvar_pred.reshape(-1, seq_len, self.input_dim),
+                    ),
+                    mode="denorm_mu_sigma",
+                )
+                return (
+                    mu_pred.cpu().detach().numpy().reshape(-1, self.input_dim),
+                    logvar_pred.cpu().detach().numpy().reshape(-1, self.input_dim),
+                )
+            decoder_output = self.decoder(X_tensor)
+            mu_pred = self.mu(decoder_output)
+            logvar_pred = (
+                self.fixed_logvar_tensor.expand(mu_pred.shape)
+                if self.fixed_logvar is not None
+                else self.logvar(decoder_output)
+            )
+            return mu_pred.cpu().detach().numpy(), logvar_pred.cpu().detach().numpy()
+
+    def inverse_transform_torch(self, X):
+        """Reconstruct from latent space"""
+        if self.use_revin:
+            decoder_output = self.decoder(X)
+            mu_pred = self.mu(decoder_output)
+            logvar_pred = (
+                self.fixed_logvar_tensor.expand(mu_pred.shape)
+                if self.fixed_logvar is not None
+                else self.logvar(decoder_output)
+            )
+            mu_pred, logvar_pred = self.revin(
+                (
+                    mu_pred.reshape(-1, self.forecast_horizon, self.input_dim),
+                    logvar_pred.reshape(-1, self.forecast_horizon, self.input_dim),
+                ),
+                mode="denorm_mu_sigma",
+            )
+            return mu_pred.reshape(-1, self.input_dim), logvar_pred.reshape(
+                -1, self.input_dim
+            )
+        decoder_output = self.decoder(X)
+        mu_pred = self.mu(decoder_output)
+        logvar_pred = (
+            self.fixed_logvar_tensor.expand(mu_pred.shape)
+            if self.fixed_logvar is not None
+            else self.logvar(decoder_output)
+        )
+        return mu_pred, logvar_pred
+
+    def reconstruction_loss(self, X_batch):
+        """Compute reconstruction loss"""
+        X_batch = X_batch.to(self.device)
+        if self.use_revin:
+            X_batch = self.revin(
+                X_batch.reshape(-1, self.context_length, self.input_dim),
+                mode="norm",
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(X_batch)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        z = self.reparameterize(mu, logvar)
+        after_decoding = self.decoder(z)
+        mu_pred = self.mu(after_decoding)
+        logvar_pred = (
+            self.fixed_logvar_tensor.expand(mu_pred.shape)
+            if self.fixed_logvar is not None
+            else self.logvar(after_decoding)
+        )
+        if self.use_revin:
+            mu_pred, logvar_pred = self.revin(
+                (
+                    mu_pred.reshape(-1, self.forecast_horizon, self.input_dim),
+                    logvar_pred.reshape(-1, self.forecast_horizon, self.input_dim),
+                ),
+                mode="denorm_mu_sigma",
+            ).reshape(-1, self.input_dim)
+        predicted_dist = torch.distributions.Normal(
+            mu_pred, torch.exp(0.5 * logvar_pred)
+        )
+        reconstruction_loss = -predicted_dist.log_prob(X_batch).mean()
+        kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        return reconstruction_loss + self.beta * kl_loss
+
+    def kl_loss(self, X_batch):
+        """Compute KL loss"""
+        X_batch = X_batch.to(self.device)
+        if self.use_revin:
+            X_batch = self.revin(
+                X_batch.reshape(-1, self.context_length, self.input_dim),
+                mode="norm",
+            ).reshape(-1, self.input_dim)
+        encoding = self.encoder(X_batch)
+        mu, logvar = self.latent_mu(encoding), self.latent_logvar(encoding)
+        kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        return self.beta * kl_loss
