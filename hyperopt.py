@@ -28,6 +28,8 @@ from dicl.adapters import (
     DropoutLinearAutoEncoder,
     LinearDecoder,
     LinearEncoder,
+    likelihoodVAE,
+    linearLikelihoodVAE,
 )
 from dicl.utils.main_script import (
     load_moment_model,
@@ -45,6 +47,8 @@ ADAPTER_CLS = {
     "dropoutLinearAE": DropoutLinearAutoEncoder,
     "linearDecoder": LinearDecoder,
     "linearEncoder": LinearEncoder,
+    "lVAE": likelihoodVAE,
+    "linearlVAE": linearLikelihoodVAE,
 }
 NOT_FULL_COMP_ADAPTERS = []
 MAX_TRAIN_SIZE = 500
@@ -62,6 +66,7 @@ class Args:
     gpu_fraction_per_worker: float = 1.0
     num_samples: int = 100
     k_fold: int = 3
+    metric: str = "mse"
 
 
 def get_search_space(adapter_type: str) -> Dict[str, Any]:
@@ -72,11 +77,11 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
         "use_revin": tune.choice([True]),
     }
 
-    if adapter_type in ["simpleAE", "VAE"]:
+    if adapter_type in ["simpleAE", "VAE", "lVAE"]:
         base_space.update(
             {
-                "num_layers": tune.choice([1, 2]),
-                "hidden_dim": tune.choice([64, 128]),
+                "num_layers": tune.choice([2]),
+                "hidden_dim": tune.choice([128]),
                 # "coeff_reconstruction": tune.choice([0.0, 1e-2, 1e-1]),
             }
         )
@@ -97,6 +102,13 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
         base_space.update(
             {
                 "p": tune.choice([0.1, 0.2, 0.3, 0.4]),
+            }
+        )
+    if "lVAE" in adapter_type:
+        base_space.update(
+            {
+                "fixed_logvar": tune.choice([0.5, 1.0, 1.5, 2.0, 3.0, None]),
+                # "fixed_logvar": tune.choice([None]),
             }
         )
 
@@ -154,7 +166,7 @@ def train_adapter(
                 "n_components": n_components,
             }
         )
-    if adapter_type in ["simpleAE", "VAE"]:
+    if adapter_type in ["simpleAE", "VAE", "lVAE"]:
         adapter_params.update(
             {
                 "num_layers": config["num_layers"],
@@ -178,6 +190,12 @@ def train_adapter(
         adapter_params.update(
             {
                 "p": config["p"],
+            }
+        )
+    if "lVAE" in adapter_type:
+        adapter_params.update(
+            {
+                "fixed_logvar": config["fixed_logvar"],
             }
         )
 
@@ -294,7 +312,9 @@ def train_adapter(
             X=time_series_test,
             prediction_horizon=forecasting_horizon,
         )
-        test_metrics = dicl_model.compute_metrics()
+        test_metrics = dicl_model.compute_metrics(
+            logdir=Path(train.get_context().get_trial_dir())
+        )
 
     metrics.update({f"test_{k}": v for k, v in test_metrics.items()})
 
@@ -330,6 +350,7 @@ def optimize_adapter(
     gpu_fraction_per_worker: float,
     seed: int = 13,
     k_fold: int = 3,
+    metric: str = "mse",
 ):
     """Run hyperparameter optimization using Ray Tune with HEBO"""
 
@@ -381,7 +402,7 @@ def optimize_adapter(
     tuner = tune.Tuner(
         trainable_with_gpu,
         tune_config=tune.TuneConfig(
-            metric="mse",  # Change this to the metric you care about
+            metric=metric,  # Change this to the metric you care about
             mode="min",
             search_alg=search_alg,
             num_samples=num_samples,
@@ -444,6 +465,7 @@ if __name__ == "__main__":
             gpu_fraction_per_worker=args.gpu_fraction_per_worker,
             seed=args.seed,
             k_fold=args.k_fold,
+            metric=args.metric,
         )
         print(f"Best config for {args.adapter} with n_comp {n_components}:")
         print(best_config)
