@@ -34,6 +34,8 @@ from dicl.adapters import (
     DropoutLinearAutoEncoder,
     LinearDecoder,
     LinearEncoder,
+    likelihoodVAE,
+    linearLikelihoodVAE,
 )
 
 
@@ -49,6 +51,8 @@ ADAPTER_CLS = {
     "dropoutLinearAE": DropoutLinearAutoEncoder,
     "linearDecoder": LinearDecoder,
     "linearEncoder": LinearEncoder,
+    "lVAE": likelihoodVAE,
+    "linearlVAE": linearLikelihoodVAE,
 }
 NOT_FULL_COMP_ADAPTERS = []
 MAX_TRAIN_SIZE = 10000
@@ -75,6 +79,8 @@ class Args:
     use_revin: bool = False
     pca_in_preprocessing: bool = False
     custom_n_comp: bool = False
+    n_epochs_fine_tuning: int = 50
+    n_epochs_adapter: int = 100
 
 
 def main(args: Args):
@@ -194,7 +200,7 @@ def main(args: Args):
                         "n_components": n_components,
                     }
                 )
-            if args.adapter in ["simpleAE", "VAE"]:
+            if args.adapter in ["simpleAE", "VAE", "lVAE"]:
                 adapter_params.update(
                     {
                         "num_layers": adapter_config["num_layers"],
@@ -279,6 +285,8 @@ def main(args: Args):
                 learning_rate=learning_rate,
                 batch_size=batch_size,
                 verbose=1,
+                n_epochs=args.n_epochs_adapter,
+                logger=logger,
             )
         elif args.supervised == "full":
             DICL.adapter_and_head_supervised_fine_tuning(
@@ -300,7 +308,7 @@ def main(args: Args):
                 learning_rate=learning_rate,
                 verbose=1,
                 use_disentangler=False,
-                n_epochs=50,
+                n_epochs=args.n_epochs_fine_tuning,
                 logger=logger,
                 seed=args.seed,
             )
@@ -317,7 +325,7 @@ def main(args: Args):
                 learning_rate=learning_rate,
                 batch_size=batch_size,
                 verbose=1,
-                n_epochs=100,
+                n_epochs=args.n_epochs_adapter,
                 logger=logger,
             )
         elif args.supervised == "bilevel":
@@ -328,7 +336,7 @@ def main(args: Args):
                 learning_rate=learning_rate,
                 verbose=1,
                 use_disentangler=False,
-                n_epochs=50,
+                n_epochs=args.n_epochs_fine_tuning,
                 logger=logger,
             )
             logger.info(
@@ -369,7 +377,7 @@ def main(args: Args):
                 learning_rate=learning_rate,
                 verbose=1,
                 use_disentangler=False,
-                n_epochs=50,
+                n_epochs=args.n_epochs_fine_tuning,
                 logger=logger,
             )
             DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
@@ -388,6 +396,8 @@ def main(args: Args):
             logger.info(
                 f"[{n_components}/{start}:{end}] Done fine tuning, now training adapter"
             )
+            DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
+        elif args.supervised == "False":
             DICL.fit_disentangler(X=np.concatenate([X_train, X_val], axis=0))
         else:
             raise ValueError(f"Invalid supervised argument: {args.supervised}")
