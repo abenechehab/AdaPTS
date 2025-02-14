@@ -55,6 +55,8 @@ pre-commit install
 
 ## 🏃 Getting started
 
+### 🏁 The getting started notebook: `notebooks/getting_started.ipynb`
+
 ### 🔄 Main script: `run.py`
 With the main script you can run a foundation model of your choice, using the adapter of your choice, on the task of your choice (dataset, context length, and forecasting horizon).
 
@@ -72,6 +74,10 @@ python run.py --forecast_horizon 96 --model_name "Salesforce/moirai-1.1-R-small"
 
 ![main figure](figures/run_params.PNG)
 
+- The datasets should be available following this format from root location (Illness is provided as an example):
+
+![main figure](figures/external_data.PNG)
+
 ### 🔍 Hyperparameter optimization: `hyperopt.py`
 Use this command to search for the best hyperparameters of a given adapter. You can customize the hyperparameter search spaces in the `get_search_space` function of the `hyperopt.py` file.
 
@@ -86,6 +92,34 @@ The hyperparameter search uses **Ray-Tune** with the **HEBO** engine.
 - Here is the list of all the command options, that you can access by running `python hyperopt.py --help`:
 
 ![main figure](figures/hyperopt_params.PNG)
+
+## 📋 List of supported Adapters
+
+| Adapter | Class Name | Dim Reduction | Dim Expansion | Probabilistic | Hyperparameters |
+|---------|------------|---------------|---------------|---------------|-----------------|
+| Identity | IdentityTransformer | ❌ | ❌ | ❌ | - |
+| PCA | MultichannelProjector(PCA) | ✅ | ❌ | ❌ | - |
+| SVD | MultichannelProjector(TruncatedSVD) | ✅ | ❌ | ❌ | - |
+| Random Projection | MultichannelProjector(SparseRandomProjection) | ✅ | ❌ | ❌ | - |
+| Linear AE | LinearAutoEncoder | ✅ | ✅ | ❌ | - |
+| Linear Decoder | LinearDecoder | ❌ | ❌ | ❌ | - |
+| Linear Encoder | LinearEncoder | ❌ | ❌ | ❌ | - |
+| Dropout Linear AE | DropoutLinearAutoEncoder | ✅ | ✅ | ✅ | dropout_rate (p) |
+| Linear VAE | betaLinearVAE | ✅ | ✅ | ✅ | beta |
+| Linear lVAE | linearLikelihoodVAE | ✅ | ✅ | ✅ | beta, fixed_logvar |
+| Simple AE | SimpleAutoEncoder | ✅ | ✅ | ❌ | hidden_dim, num_layers |
+| VAE | betaVAE | ✅ | ✅ | ✅ | hidden_dim, num_layers, beta |
+| lVAE | likelihoodVAE | ✅ | ✅ | ✅ | hidden_dim, num_layers, beta, fixed_logvar |
+| Flow | NormalizingFlow | ❌ | ❌ | ❌ | hidden_dim, num_coupling |
+| AE Flow | AENormalizingFlow | ✅ | ✅ | ✅ | hidden_dim, num_coupling, dropout_rate |
+| RevIN | JustRevIn | ❌ | ❌ | ❌ | - |
+
+## 📋 List of supported Time series Foundation Models
+
+| Foundation Model | Handles Multivariate | Probabilistic | Sizes | Paper | Code | HuggingFace |
+|-----------------|---------------------|---------------|--------|-------|------|-------------|
+| MOMENT | ❌ | ❌ | small, medium, large | [Paper](https://arxiv.org/abs/2308.08723) | [GitHub](https://github.com/moment-timeseries-foundation-model/moment) | [AutonLab/MOMENT](https://huggingface.co/AutonLab/MOMENT) |
+| MOIRAI | ⚠️ (flatten+attention bias) | ✅ | small, medium, large | [Paper](https://arxiv.org/abs/2402.01801) | [GitHub](https://github.com/SalesforceAIResearch/uni2ts) | [Salesforce/moirai](https://huggingface.co/Salesforce/moirai) |
 
 ## ⚖️ License
 
