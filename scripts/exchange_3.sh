@@ -1,2 +1,0 @@
-python run.py --forecast_horizon 96 --model_name "AutonLab/MOMENT-1-small" --context_length 512 --seed $RANDOM --device "cuda:2" --dataset_name "ExchangeRate" --adapter "VAE" --use_revin --supervised "ft_then_supervised"
-python run.py --forecast_horizon 96 --model_name "AutonLab/MOMENT-1-small" --context_length 512 --seed $RANDOM --device "cuda:2" --dataset_name "ExchangeRate" --adapter "VAE" --use_revin --supervised "ft_then_supervised"
