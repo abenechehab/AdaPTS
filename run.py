@@ -40,7 +40,6 @@ from adapts.adapters import (
 
 
 warnings.filterwarnings("ignore", category=FutureWarning)
-os.environ["HF_HOME"] = "/mnt/vdb/hugguingface/"
 ADAPTER_CLS = {
     "simpleAE": SimpleAutoEncoder,
     "linearAE": LinearAutoEncoder,
@@ -67,12 +66,12 @@ class Args:
     context_length: int = 512
     dataset_name: str = "ETTh1"  # Will be set based on forecast_horizon
     adapter: Optional[str] = None  # "pca"
-    data_path: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/results/data_latest.csv")
+    data_path: Path = Path("results/latest.csv")
     seed: int = 13
     device: str = "cpu"
     logger_name: str = "DICL Adapter"
     log_level: str = "INFO"
-    log_dir: Path = Path("/mnt/vdb/abenechehab/dicl-adapters/logs/latest")
+    log_dir: Path = Path("logs/latest")
     number_n_comp_to_try: int = 4
     inference_batch_size: int = 128
     supervised: str = "False"

@@ -9,8 +9,9 @@
 *.egg-info
 PKG-INFO
 
-runs/
-artifacts/
+scripts/
+vizu/
+
 # This ignores everything in external_data
 external_data/forecasting/Electricity
 external_data/forecasting/ETTh1
@@ -26,6 +27,10 @@ external_data/UEA
 
 build/
 logs/
+results/
+notebooks/external/
+notebooks/internal
+
 
 .ruff_cache/
 

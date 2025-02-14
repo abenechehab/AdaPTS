@@ -331,7 +331,7 @@ def train_adapter(
         context_length=context_length,
         forecasting_horizon=forecasting_horizon,
         config=config,
-        data_path=Path("/mnt/vdb/abenechehab/dicl-adapters/results/hyperopt.csv"),
+        data_path=Path("results/hyperopt.csv"),
         elapsed_time=time.time() - start_time,
         seed=seed,
     )
@@ -356,7 +356,7 @@ def optimize_adapter(
 
     # Ray initialization with proper GPU configuration
     # Set default Ray results directory
-    ray_results_dir = "/mnt/vdb/abenechehab/dicl-adapters/logs/ray_results"
+    ray_results_dir = "logs/ray_results"
     os.makedirs(ray_results_dir, exist_ok=True)
 
     ray.init(
