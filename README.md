@@ -30,31 +30,31 @@ An overview of the repository's structure and contents (inside `/src/adapts/`):
 
 ## 🚀 Installation
 
-- create a conda environment:
+🔹 create a conda environment
 ```
 conda create -n adapts python=3.10
 ```
-- activate the environment:
+🔹 activate the environment
 ```
 conda activate adapts
 ```
-- Install the package
+🔹 install the package
 ```
 pip install .
 ```
-- to run the **hyperopt** script, install the optional dependencies
+🔹 to run the **hyperopt** script, install the optional dependencies
 ```
 pip install .[hyperopt]
 ```
-- to use **Moment**, install the corresponding repository
+🔹 to use **Moment**, install the corresponding repository
 ```
 pip install git+https://github.com/moment-timeseries-foundation-model/moment.git
 ```
-- to use **Moirai**, install the corresponding repository
+🔹 to use **Moirai**, install the corresponding repository
 ```
 pip install git+https://github.com/SalesforceAIResearch/uni2ts.git
 ```
-- for developers, install the optional dependencies
+🔹 for developers (includes pre-commit hooks 🛠️)
 ```
 pip install -e .[dev]
 pre-commit install
