@@ -1,6 +1,13 @@
-# AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting
+<div align="center">
+<h1>AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting 📊</h1>
 
-## 🎯 Overview
+[![paper](https://img.shields.io/static/v1?label=arXiv&message=2402.03885&color=B31B1B&logo=arXiv)](https://arxiv.org/abs/2410.11711)
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-FFD21E?logo=huggingface&logoColor=000)](https://huggingface.co/papers/2410.11711)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/license/MIT)
+[![Python: 3.10](https://img.shields.io/badge/Python-3.10-blue)]()
+
+</div>
+
 This repository contains the official implementation of the paper:
 
    >Abdelhakim Benechehab, Vasilii Feofanov, Giuseppe Paolo, Albert Thomas, Maurizio Filippone, Balázs Kégl.
@@ -98,9 +105,9 @@ The hyperparameter search uses **Ray-Tune** with the **HEBO** engine.
 | Adapter | Class Name | Dim Reduction | Dim Expansion | Probabilistic | Hyperparameters |
 |---------|------------|---------------|---------------|---------------|-----------------|
 | Identity | IdentityTransformer | ❌ | ❌ | ❌ | - |
-| PCA | MultichannelProjector(PCA) | ✅ | ❌ | ❌ | - |
-| SVD | MultichannelProjector(TruncatedSVD) | ✅ | ❌ | ❌ | - |
-| Random Projection | MultichannelProjector(SparseRandomProjection) | ✅ | ❌ | ❌ | - |
+| PCA | PCA | ✅ | ❌ | ❌ | - |
+| SVD | TruncatedSVD | ✅ | ❌ | ❌ | - |
+| Random Projection | SparseRandomProjection | ✅ | ❌ | ❌ | - |
 | Linear AE | LinearAutoEncoder | ✅ | ✅ | ❌ | - |
 | Linear Decoder | LinearDecoder | ❌ | ❌ | ❌ | - |
 | Linear Encoder | LinearEncoder | ❌ | ❌ | ❌ | - |
@@ -118,8 +125,8 @@ The hyperparameter search uses **Ray-Tune** with the **HEBO** engine.
 
 | Foundation Model | Handles Multivariate | Probabilistic | Sizes | Paper | Code | HuggingFace |
 |-----------------|---------------------|---------------|--------|-------|------|-------------|
-| MOMENT | ❌ | ❌ | small, medium, large | [Paper](https://arxiv.org/abs/2308.08723) | [GitHub](https://github.com/moment-timeseries-foundation-model/moment) | [AutonLab/MOMENT](https://huggingface.co/AutonLab/MOMENT) |
-| MOIRAI | ⚠️ (flatten+attention bias) | ✅ | small, medium, large | [Paper](https://arxiv.org/abs/2402.01801) | [GitHub](https://github.com/SalesforceAIResearch/uni2ts) | [Salesforce/moirai](https://huggingface.co/Salesforce/moirai) |
+| MOMENT | ❌ | ❌ | small, medium, large | [Paper](https://arxiv.org/abs/2402.03885) | [GitHub](https://github.com/moment-timeseries-foundation-model/moment) | [AutonLab/MOMENT](https://huggingface.co/AutonLab/MOMENT-1-large) |
+| MOIRAI | ⚠️ (flatten+attention bias) | ✅ | small, medium, large | [Paper](https://arxiv.org/abs/2402.02592) | [GitHub](https://github.com/SalesforceAIResearch/uni2ts) | [Salesforce/moirai](https://huggingface.co/collections/Salesforce/moirai-r-models-65c8d3a94c51428c300e0742) |
 
 ## ⚖️ License
 
@@ -130,3 +137,18 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 Do not hesitate to contribute to this project by submitting pull requests or issues, we would be happy to receive feedback and integrate your suggestions.
 
 ---
+
+## 📚 Citing AdaPTS 
+
+If you use AdaPTS in your work, please cite our paper:
+
+```bibtex
+@inproceedings{
+benechehab2025zeroshot,
+title={Zero-shot Model-based Reinforcement Learning using Large Language Models},
+author={Abdelhakim Benechehab and Youssef Attia El Hili and Ambroise Odonnat and Oussama Zekri and Albert Thomas and Giuseppe Paolo and Maurizio Filippone and Ievgen Redko and Bal{\'a}zs K{\'e}gl},
+booktitle={The Thirteenth International Conference on Learning Representations},
+year={2025},
+url={https://openreview.net/forum?id=uZFXpPrwSh}
+}
+```
