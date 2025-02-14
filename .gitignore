@@ -11,7 +11,19 @@ PKG-INFO
 
 runs/
 artifacts/
-external_data/
+# This ignores everything in external_data
+external_data/forecasting/Electricity
+external_data/forecasting/ETTh1
+external_data/forecasting/ETTh2
+external_data/forecasting/ETTm1
+external_data/forecasting/ETTm2
+external_data/forecasting/ExchangeRate
+external_data/forecasting/Traffic
+external_data/forecasting/Weather
+external_data/Others
+external_data/UCRArchive_2018
+external_data/UEA
+
 build/
 logs/
 
