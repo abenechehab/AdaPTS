@@ -69,7 +69,7 @@ class Args:
     data_path: Path = Path("results/latest.csv")
     seed: int = 13
     device: str = "cpu"
-    logger_name: str = "DICL Adapter"
+    logger_name: str = "AdaPTS"
     log_level: str = "INFO"
     log_dir: Path = Path("logs/latest")
     number_n_comp_to_try: int = 4
