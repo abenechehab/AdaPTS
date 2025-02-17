@@ -1,8 +1,8 @@
 <div align="center">
 <h1>AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting 📊</h1>
 
-[![paper](https://img.shields.io/static/v1?label=arXiv&message=2402.03885&color=B31B1B&logo=arXiv)](https://arxiv.org/abs/2410.11711)
-[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-FFD21E?logo=huggingface&logoColor=000)](https://huggingface.co/papers/2410.11711)
+[![paper](https://img.shields.io/static/v1?label=arXiv&message=2402.03885&color=B31B1B&logo=arXiv)](https://arxiv.org/abs/2502.10235)
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-FFD21E?logo=huggingface&logoColor=000)](https://huggingface.co/papers/2502.10235)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue)](https://opensource.org/license/MIT)
 [![Python: 3.10](https://img.shields.io/badge/Python-3.10-blue)]()
 
@@ -11,7 +11,7 @@
 This repository contains the official implementation of the paper:
 
    >Abdelhakim Benechehab, Vasilii Feofanov, Giuseppe Paolo, Albert Thomas, Maurizio Filippone, Balázs Kégl.
-   [AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting](https://arxiv.org/pdf/2402.10198).
+   [AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting](https://arxiv.org/abs/2502.10235).
 
 ### 📝 Abstract:
 Pre-trained foundation models (FMs) have shown exceptional performance in univariate time series forecasting tasks. However, several practical challenges persist, including managing intricate dependencies among features and quantifying uncertainty in predictions. This study aims to tackle these critical limitations by introducing \textbf{adapters}—feature-space transformations that facilitate the effective use of pre-trained univariate time series FMs for multivariate tasks. Adapters operate by projecting multivariate inputs into a suitable latent space and applying the FM independently to each dimension \rebuttal{\st{in a zero-shot manner}}. Inspired by the literature on representation learning and partially stochastic Bayesian neural networks, we present a range of adapters and optimization/inference strategies. Experiments conducted on both synthetic and real-world datasets confirm the efficacy of adapters, demonstrating substantial enhancements in forecasting accuracy and uncertainty quantification compared to baseline methods. Our framework, \textbf{AdaPTS}, positions adapters as a modular, scalable, and effective solution for leveraging time series FMs in multivariate contexts, thereby promoting their wider adoption in real-world applications.
@@ -143,12 +143,14 @@ Do not hesitate to contribute to this project by submitting pull requests or iss
 If you use AdaPTS in your work, please cite our paper:
 
 ```bibtex
-@inproceedings{
-benechehab2025zeroshot,
-title={Zero-shot Model-based Reinforcement Learning using Large Language Models},
-author={Abdelhakim Benechehab and Youssef Attia El Hili and Ambroise Odonnat and Oussama Zekri and Albert Thomas and Giuseppe Paolo and Maurizio Filippone and Ievgen Redko and Bal{\'a}zs K{\'e}gl},
-booktitle={The Thirteenth International Conference on Learning Representations},
-year={2025},
-url={https://openreview.net/forum?id=uZFXpPrwSh}
+@misc{
+   benechehab2025adapts,
+   title={AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting}, 
+   author={Abdelhakim Benechehab and Vasilii Feofanov and Giuseppe Paolo and Albert Thomas and Maurizio Filippone and Balázs Kégl},
+   year={2025},
+   eprint={2502.10235},
+   archivePrefix={arXiv},
+   primaryClass={stat.ML},
+   url={https://arxiv.org/abs/2502.10235}, 
 }
 ```
