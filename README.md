@@ -1,3 +1,13 @@
+## 🔥 **Exciting News!** 🔥
+Our paper has been **accepted at ICML 2025**! 🎉📄🎓  
+👉 **[AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting](https://icml.cc/virtual/2025/poster/43518)**  
+
+---
+
+A workshop version of this paper has been presented at [**SCOPE @ ICLR 2025**](https://openreview.net/forum?id=S3i6HAmmZu)
+
+---
+
 <div align="center">
 <h1>AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting 📊</h1>
 
