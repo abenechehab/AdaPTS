@@ -153,14 +153,12 @@ Do not hesitate to contribute to this project by submitting pull requests or iss
 If you use AdaPTS in your work, please cite our paper:
 
 ```bibtex
-@misc{
+@inproceedings{
    benechehab2025adapts,
    title={AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting}, 
    author={Abdelhakim Benechehab and Vasilii Feofanov and Giuseppe Paolo and Albert Thomas and Maurizio Filippone and Balázs Kégl},
+   booktitle={Forty-second International Conference on Machine Learning},
    year={2025},
-   eprint={2502.10235},
-   archivePrefix={arXiv},
-   primaryClass={stat.ML},
-   url={https://arxiv.org/abs/2502.10235}, 
+   url={https://openreview.net/forum?id=yeICCRy3lE}
 }
 ```
