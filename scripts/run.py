@@ -269,8 +269,7 @@ def main(args: Args):
         )
 
         logger.info(
-            f"[{n_components}/{start}:{end}] Starting fitting adapter: "
-            f"{args.adapter}"
+            f"[{n_components}/{start}:{end}] Starting fitting adapter: {args.adapter}"
         )
         next_time_cp = time.time()
         os.makedirs(Path(log_dir) / f"n_comp_{n_components}", exist_ok=True)
