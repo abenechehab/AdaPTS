@@ -5,6 +5,7 @@
 *.pyc
 
 .ipynb_checkpoints/
+.vscode
 
 *.egg-info
 PKG-INFO
