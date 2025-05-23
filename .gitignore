@@ -9,7 +9,6 @@
 *.egg-info
 PKG-INFO
 
-scripts/
 vizu/
 
 # This ignores everything in external_data
