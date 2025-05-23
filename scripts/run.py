@@ -14,7 +14,8 @@ import torch
 
 # adapts
 from adapts import adapts, adapters
-from adapts.icl import iclearner as icl
+from adapts.icl.moment import MomentICLTrainer
+from adapts.icl.moirai import MoiraiICLTrainer
 from adapts.utils.main_script import (
     save_metrics_to_csv,
     setup_logging,
@@ -118,8 +119,8 @@ def main(args: Args):
     # Limit training size
     if len(X_train) > MAX_TRAIN_SIZE:
         indices = np.random.choice(len(X_train), MAX_TRAIN_SIZE, replace=False)
-        X_train = X_train[indices]
-        y_train = y_train[indices]
+        X_train = np.array(X_train)[indices]
+        y_train = np.array(y_train)[indices]
         train_size = MAX_TRAIN_SIZE
     else:
         train_size = len(X_train)
@@ -163,12 +164,12 @@ def main(args: Args):
                 model = load_moment_model(args.model_name, args.forecast_horizon).to(
                     torch.device(args.device)
                 )
-                icl_constructor = icl.MomentICLTrainer
+                icl_constructor = MomentICLTrainer
             elif "moirai" in args.model_name:
                 model = load_moirai_model(
                     args.model_name, args.forecast_horizon, args.context_length
                 ).to(torch.device(args.device))
-                icl_constructor = icl.MoiraiICLTrainer
+                icl_constructor = MoiraiICLTrainer
             elif "ttm" in args.model_name:
                 raise NotImplementedError("TTM backbone not implemented yet")
             else:
@@ -379,19 +380,6 @@ def main(args: Args):
                 n_epochs=args.n_epochs_fine_tuning,
                 logger=logger,
             )
-            adapts_model.fit_adapter(X=np.concatenate([X_train, X_val], axis=0))
-        elif args.supervised == "unsupervised":
-            adapts_model.fine_tune_iclearner(
-                X=X_train,
-                y=y_train,
-                batch_size=batch_size,
-                learning_rate=learning_rate,
-                verbose=1,
-                use_adapter=False,
-                n_epochs=50,
-                logger=logger,
-                seed=args.seed,
-            )
             logger.info(
                 f"[{n_components}/{start}:{end}] Done fine tuning, now training adapter"
             )
@@ -433,6 +421,9 @@ def main(args: Args):
             f"[{n_components}/{start}:{end}] metrics [mse={metrics['mse']},"
             f"mae={metrics['mae']}] computed in {time.time() - next_time_cp:.2f} sec"
         )
+
+        # Ensure the 'results' directory exists
+        os.makedirs("results", exist_ok=True)
 
         save_metrics_to_csv(
             metrics,
