@@ -185,9 +185,9 @@ class ADAPTS:
             Tuple[NDArray, ...]: Mean, mode, lower bound, and upper bound of the
                 predictions.
         """
-        assert (
-            X.shape[1] == self.n_features
-        ), f"N features doesnt correspond to {self.n_features}"
+        assert X.shape[1] == self.n_features, (
+            f"N features doesnt correspond to {self.n_features}"
+        )
 
         self.context_length = X.shape[-1]
         self.X = X
@@ -435,9 +435,9 @@ class ADAPTS:
 
         writer = SummaryWriter(log_dir)
 
-        assert isinstance(
-            self.adapter.base_projector_, torch.nn.Module
-        ), "adapter must be a PyTorch Module"
+        assert isinstance(self.adapter.base_projector_, torch.nn.Module), (
+            "adapter must be a PyTorch Module"
+        )
 
         self.scaler.fit(np.concatenate([X_train, y_train], axis=-1))
         X_scaled, y_scaled = (
@@ -510,7 +510,7 @@ class ADAPTS:
         )
         # Initialize learning rate scheduler
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=5, verbose=True, min_lr=1e-6
+            optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-6
         )
 
         for epoch in tqdm(
@@ -726,9 +726,9 @@ class ADAPTS:
 
         writer = SummaryWriter(log_dir)
 
-        assert isinstance(
-            self.adapter.base_projector_, torch.nn.Module
-        ), "adapter must be a PyTorch Module"
+        assert isinstance(self.adapter.base_projector_, torch.nn.Module), (
+            "adapter must be a PyTorch Module"
+        )
 
         self.scaler.fit(np.concatenate([X_train, y_train], axis=-1))
         X_scaled, y_scaled = (

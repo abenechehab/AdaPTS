@@ -3,6 +3,7 @@ import csv
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -71,7 +72,7 @@ def prepare_data(dataset_name: str, context_length: int, forecasting_horizon: in
         return X_train, y_train, None, None, X_test, y_test, n_features
     else:
         datareader = data_readers.DataReader(
-            data_path="/mnt/vdb/abenechehab/dicl-adapters/external_data/",
+            data_path="external_data/",
             transform_ts_size=context_length,
             univariate=False,
         )
@@ -311,8 +312,13 @@ def save_hyperopt_metrics_to_csv(
 
 # At the start of your program, configure logging once:
 def setup_logging(
-    logger_name, log_level, log_dir, dataset_name, adapter, model_name
-) -> logging.Logger:
+    logger_name: str,
+    log_level: str,
+    log_dir: Path,
+    dataset_name: str,
+    adapter: Optional[str],
+    model_name: str,
+) -> Tuple[logging.Logger, Path]:
     # Clear existing handlers
     root = logging.getLogger(logger_name)
     if root.handlers:
@@ -324,9 +330,10 @@ def setup_logging(
 
     # Create log filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = os.path.join(
-        log_dir, dataset_name, f"{timestamp}_{dataset_name}_{adapter}_{model_name}"
+    log_dir = (
+        log_dir / dataset_name / f"{timestamp}_{dataset_name}_{adapter}_{model_name}"
     )
+
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f"run_{timestamp}.log")
 

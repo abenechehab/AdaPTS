@@ -436,7 +436,7 @@ class LinearAutoEncoder(nn.Module):
         # Define optimizer, scheduler and loss
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=5, verbose=True
+            optimizer, mode="min", factor=0.5, patience=5
         )
         criterion = nn.MSELoss()
 
@@ -1216,9 +1216,9 @@ class SimpleAutoEncoder(nn.Module):
             self.encoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
             self.encoder.add_module(f"layer{i}-act", nn.LeakyReLU())
         self.encoder.add_module(
-            f"layer{num_layers+1}", nn.Linear(hidden_dim, n_components)
+            f"layer{num_layers + 1}", nn.Linear(hidden_dim, n_components)
         )
-        self.encoder.add_module(f"layer{num_layers+1}-act", nn.LeakyReLU())
+        self.encoder.add_module(f"layer{num_layers + 1}-act", nn.LeakyReLU())
 
         # Build decoder layers
         self.decoder = nn.Sequential()
@@ -1230,9 +1230,9 @@ class SimpleAutoEncoder(nn.Module):
             self.decoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
             self.decoder.add_module(f"layer{i}-act", nn.LeakyReLU())
         self.decoder.add_module(
-            f"layer{num_layers+1}", nn.Linear(hidden_dim, input_dim)
+            f"layer{num_layers + 1}", nn.Linear(hidden_dim, input_dim)
         )
-        self.decoder.add_module(f"layer{num_layers+1}-act", nn.Tanh())
+        self.decoder.add_module(f"layer{num_layers + 1}-act", nn.Tanh())
 
         self.use_revin = use_revin
         if use_revin:
@@ -1415,9 +1415,9 @@ class betaVAE(nn.Module):
             self.decoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
             self.decoder.add_module(f"layer{i}-act", nn.LeakyReLU())
         self.decoder.add_module(
-            f"layer{num_layers+1}", nn.Linear(hidden_dim, input_dim)
+            f"layer{num_layers + 1}", nn.Linear(hidden_dim, input_dim)
         )
-        self.decoder.add_module(f"layer{num_layers+1}-act", nn.Tanh())
+        self.decoder.add_module(f"layer{num_layers + 1}-act", nn.Tanh())
 
         # Build latent space layers
         self.latent_mu = nn.Linear(hidden_dim, n_components)
@@ -2418,9 +2418,9 @@ class likelihoodVAE(nn.Module):
             self.decoder.add_module(f"layer{i}-bn", nn.BatchNorm1d(int(hidden_dim)))
             self.decoder.add_module(f"layer{i}-act", nn.LeakyReLU())
         self.decoder.add_module(
-            f"layer{num_layers+1}", nn.Linear(hidden_dim, input_dim)
+            f"layer{num_layers + 1}", nn.Linear(hidden_dim, input_dim)
         )
-        self.decoder.add_module(f"layer{num_layers+1}-act", nn.Tanh())
+        self.decoder.add_module(f"layer{num_layers + 1}-act", nn.Tanh())
 
         # Build latent space layers
         self.latent_mu = nn.Linear(hidden_dim, n_components)
