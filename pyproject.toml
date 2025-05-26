@@ -28,7 +28,7 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = ['ruff', 'pre-commit', 'black']
-hyperopt = ['ray[tune]==2.40.0', 'hebo==0.3.6']
+hyperopt = ['gpy==1.13.2', 'ray[tune]==2.40.0', 'hebo==0.3.6']
 
 [tool.setuptools]
 license-files = ['LICEN[CS]E*', 'COPYING*', 'NOTICE*', 'AUTHORS*']
