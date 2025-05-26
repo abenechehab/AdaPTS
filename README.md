@@ -1,6 +1,6 @@
 ## 🔥 **Exciting News!** 🔥
-Our paper has been **accepted at ICML 2025**! 🎉📄🎓  
-👉 **[AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting](https://icml.cc/virtual/2025/poster/43518)**  
+Our paper has been **accepted at ICML 2025**! 🎉📄🎓
+👉 **[AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting](https://icml.cc/virtual/2025/poster/43518)**
 
 ---
 
@@ -79,12 +79,12 @@ With the main script you can run a foundation model of your choice, using the ad
 
 - Here is an example command using **Moment** (the supervision mode supported for Moment is `--supervised "ft_then_supervised"` because we need to first fine-tune the linear forecasting head):
 ```
-python run.py --forecast_horizon 24 --model_name "AutonLab/MOMENT-1-small" --context_length 512 --seed $RANDOM --device "cuda:0" --dataset_name "Illness" --adapter "linearlVAE" --use_revin --supervised "ft_then_supervised"
+python scripts/run.py --forecast_horizon 24 --model_name "AutonLab/MOMENT-1-small" --context_length 512 --seed $RANDOM --device "cuda:0" --dataset_name "Illness" --adapter "linearlVAE" --use_revin --supervised "ft_then_supervised"
 ```
 
 - Here is an example command using **Moirai** (the supervision mode supported for Moirai is `--supervised "True"` because it forecasts in a zero-shot manner):
 ```
-python run.py --forecast_horizon 96 --model_name "Salesforce/moirai-1.1-R-small" --context_length 512 --seed $RANDOM --device "cuda:0" --dataset_name "ETTh1" --adapter "VAE" --use_revin --supervised "True"
+python scripts/run.py --forecast_horizon 96 --model_name "Salesforce/moirai-1.1-R-small" --context_length 512 --seed $RANDOM --device "cuda:0" --dataset_name "ETTh1" --adapter "VAE" --use_revin --supervised "True"
 ```
 
 - Here is the list of all the command options, that you can access by running `python run.py --help`:
@@ -101,7 +101,7 @@ Use this command to search for the best hyperparameters of a given adapter. You 
 - Here is an example:
 
 ```
-python hyperopt.py --seed=$RANDOM --forecasting_horizon=96 --dataset_name="ExchangeRate" --adapter="VAE" --gpu_fraction_per_worker=1.0 --num_samples=50
+python scripts/hyperopt.py --seed=$RANDOM --forecasting_horizon=96 --dataset_name="ExchangeRate" --adapter="VAE" --gpu_fraction_per_worker=1.0 --num_samples=50
 ```
 
 The hyperparameter search uses **Ray-Tune** with the **HEBO** engine.
@@ -148,14 +148,14 @@ Do not hesitate to contribute to this project by submitting pull requests or iss
 
 ---
 
-## 📚 Citing AdaPTS 
+## 📚 Citing AdaPTS
 
 If you use AdaPTS in your work, please cite our paper:
 
 ```bibtex
 @inproceedings{
    benechehab2025adapts,
-   title={AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting}, 
+   title={AdaPTS: Adapting Univariate Foundation Models to Probabilistic Multivariate Time Series Forecasting},
    author={Abdelhakim Benechehab and Vasilii Feofanov and Giuseppe Paolo and Albert Thomas and Maurizio Filippone and Balázs Kégl},
    booktitle={Forty-second International Conference on Machine Learning},
    year={2025},
