@@ -16,12 +16,14 @@ import torch
 from adapts import adapts, adapters
 from adapts.icl.moment import MomentICLTrainer
 from adapts.icl.moirai import MoiraiICLTrainer
+from adapts.icl.ttm import TTMICLTrainer
 from adapts.utils.main_script import (
     save_metrics_to_csv,
     setup_logging,
     prepare_data,
     load_moment_model,
     load_moirai_model,
+    load_ttm_model,
 )
 from adapts.utils.preprocessing import get_gpu_memory_stats
 from adapts.adapters import (
@@ -171,7 +173,13 @@ def main(args: Args):
                 ).to(torch.device(args.device))
                 icl_constructor = MoiraiICLTrainer
             elif "ttm" in args.model_name:
-                raise NotImplementedError("TTM backbone not implemented yet")
+                # Load model
+                model = load_ttm_model(
+                    model_name=args.model_name, # ibm-granite/granite-timeseries-ttm-r2
+                    forecast_horizon=args.forecast_horizon,
+                    context_length=args.context_length,
+                ).to(torch.device(args.device))
+                icl_constructor = TTMICLTrainer
             else:
                 raise ValueError(f"Not supported model: {args.model_name}")
             logger.info(
