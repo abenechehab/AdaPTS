@@ -17,7 +17,9 @@ from ray.tune.search.hebo import HEBOSearch
 
 from adapts import adapters
 from adapts.adapts import ADAPTS
-from adapts.icl import iclearner as icl
+from adapts.icl.moment import MomentICLTrainer
+from adapts.icl.moirai import MoiraiICLTrainer
+from adapts.icl.ttm import TTMICLTrainer
 from adapts.adapters import (
     SimpleAutoEncoder,
     LinearAutoEncoder,
@@ -33,6 +35,8 @@ from adapts.adapters import (
 )
 from adapts.utils.main_script import (
     load_moment_model,
+    load_moirai_model,
+    load_ttm_model,
     prepare_data,
     save_hyperopt_metrics_to_csv,
 )
@@ -50,7 +54,7 @@ ADAPTER_CLS = {
     "lVAE": likelihoodVAE,
     "linearlVAE": linearLikelihoodVAE,
 }
-NOT_FULL_COMP_ADAPTERS = []
+NOT_FULL_COMP_ADAPTERS = ["lVAE"]
 MAX_TRAIN_SIZE = 500
 
 
@@ -80,8 +84,8 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
     if adapter_type in ["simpleAE", "VAE", "lVAE"]:
         base_space.update(
             {
-                "num_layers": tune.choice([2]),
-                "hidden_dim": tune.choice([128]),
+                "num_layers": tune.choice([1,2]),
+                "hidden_dim": tune.choice([64,128,256]),
                 # "coeff_reconstruction": tune.choice([0.0, 1e-2, 1e-1]),
             }
         )
@@ -212,12 +216,23 @@ def train_adapter(
 
     # model
     if "MOMENT" in model_name:
-        model = load_moment_model(model_name, forecasting_horizon).to(
+        model = load_moment_model(model_name, forecasting_horizon).to(device)
+        icl_constructor = MomentICLTrainer
+    elif "moirai" in model_name:
+        model = load_moirai_model(model_name, forecasting_horizon, context_length).to(
             device
-        )  # Use the determined device
-        icl_constructor = icl.MomentICLTrainer
+        )
+        icl_constructor = MoiraiICLTrainer
+    elif "ttm" in model_name:
+        # Load model
+        model = load_ttm_model(
+            model_name=model_name,  # ibm-granite/granite-timeseries-ttm-r2
+            forecast_horizon=forecasting_horizon,
+            context_length=context_length,
+        ).to(device)
+        icl_constructor = TTMICLTrainer
     else:
-        raise ValueError(f"Not supported model: {model_name}")
+        raise ValueError(f"Not supported model: {args.model_name}")
     start_time = time.time()
     # iclearner
     iclearner = icl_constructor(
@@ -273,17 +288,21 @@ def train_adapter(
             n_components=n_components,
         )
 
-        # Train on this fold
-        adapts_model.fine_tune_iclearner(
-            X=X_train,
-            y=y_train,
-            batch_size=config["batch_size"],
-            learning_rate=config["learning_rate"],
-            verbose=0,
-            use_adapter=False,
-            n_epochs=50,
-            seed=seed,
-        )
+        if "ttm" in model_name:
+            pass
+        else:
+            # Train on this fold
+            adapts_model.fine_tune_iclearner(
+                X=X_train,
+                y=y_train,
+                batch_size=config["batch_size"],
+                learning_rate=config["learning_rate"],
+                verbose=0,
+                use_adapter=False,
+                n_epochs=50,
+                seed=seed,
+            )
+
         adapts_model.adapter_supervised_fine_tuning(
             X_fold_train,
             y_fold_train,
@@ -299,7 +318,7 @@ def train_adapter(
                 X=fold_time_series,
                 prediction_horizon=forecasting_horizon,
             )
-            fold_metrics.append(adapts_model.compute_metrics())
+            fold_metrics.append(adapts_model.compute_metrics(calibration=False))
 
     # Calculate average metrics across folds
     metrics = {}
@@ -313,6 +332,7 @@ def train_adapter(
             prediction_horizon=forecasting_horizon,
         )
         test_metrics = adapts_model.compute_metrics(
+            calibration=False,
             logdir=Path(train.get_context().get_trial_dir())
         )
 
@@ -356,7 +376,7 @@ def optimize_adapter(
 
     # Ray initialization with proper GPU configuration
     # Set default Ray results directory
-    ray_results_dir = "logs/ray_results"
+    ray_results_dir = "/mnt/data_2/abenechehab/AdaPTS/logs/ray_results"
     os.makedirs(ray_results_dir, exist_ok=True)
 
     ray.init(
