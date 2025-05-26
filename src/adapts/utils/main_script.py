@@ -17,6 +17,10 @@ from momentfm import MOMENTPipeline
 # Moirai
 from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 
+# TTM
+from tsfm_public.models.tinytimemixer import TinyTimeMixerForPrediction
+from tsfm_public.toolkit.get_model import get_model
+
 
 RL_DATASETS = ["HalfCheetah_expert"]
 
@@ -59,6 +63,23 @@ def load_moirai_model(
     return model
 
 
+def load_ttm_model(
+    model_name: str,
+    forecast_horizon: int,
+    context_length: int,
+) -> TinyTimeMixerForPrediction:
+    zeroshot_model = get_model(
+        model_name,
+        context_length=context_length,
+        prediction_length=forecast_horizon,
+        freq_prefix_tuning=False,
+        freq=None,
+        prefer_l1_loss=False,
+        prefer_longer_context=True,
+    )
+    return zeroshot_model
+
+
 def prepare_data(dataset_name: str, context_length: int, forecasting_horizon: int):
     if dataset_name in RL_DATASETS:
         X_train, y_train, X_test, y_test, n_features = prepare_data_rl(
@@ -72,7 +93,8 @@ def prepare_data(dataset_name: str, context_length: int, forecasting_horizon: in
         return X_train, y_train, None, None, X_test, y_test, n_features
     else:
         datareader = data_readers.DataReader(
-            data_path="external_data/",
+            # TODO: handle this as parameter to avoid absolute path
+            data_path="/mnt/data_2/abenechehab/AdaPTS/external_data/",
             transform_ts_size=context_length,
             univariate=False,
         )
@@ -273,11 +295,28 @@ def save_hyperopt_metrics_to_csv(
     context_length,
     forecasting_horizon,
     config: dict,
-    data_path,
-    elapsed_time,
-    seed,
+    data_path: Path,
+    elapsed_time: float,
+    seed: int,
 ):
-    df_hyperopt = pd.read_csv(data_path)
+    if not data_path.exists():
+        # Create the directory if it doesn't exist
+        data_path.parent.mkdir(parents=True, exist_ok=True)
+        df_hyperopt = pd.DataFrame(
+            columns=[
+                "dataset",
+                "model",
+                "adapter",
+                "n_features",
+                "n_components",
+                "context_length",
+                "forecasting_horizon",
+                "running_time",
+                "seed",
+            ]
+        )
+    else:
+        df_hyperopt = pd.read_csv(data_path)
 
     # Create a new row as a dictionary
     new_row = {
