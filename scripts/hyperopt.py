@@ -376,6 +376,7 @@ def optimize_adapter(
     # Ray initialization with proper GPU configuration
     # Set default Ray results directory
     ray_results_dir = "/mnt/data_2/abenechehab/AdaPTS/logs/ray_results"
+    # TODO: handle this as parameter to avoid absolute path
     os.makedirs(ray_results_dir, exist_ok=True)
 
     ray.init(
