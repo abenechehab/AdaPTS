@@ -84,8 +84,8 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
     if adapter_type in ["simpleAE", "VAE", "lVAE"]:
         base_space.update(
             {
-                "num_layers": tune.choice([1,2]),
-                "hidden_dim": tune.choice([64,128,256]),
+                "num_layers": tune.choice([1, 2]),
+                "hidden_dim": tune.choice([64, 128, 256]),
                 # "coeff_reconstruction": tune.choice([0.0, 1e-2, 1e-1]),
             }
         )
@@ -332,8 +332,7 @@ def train_adapter(
             prediction_horizon=forecasting_horizon,
         )
         test_metrics = adapts_model.compute_metrics(
-            calibration=False,
-            logdir=Path(train.get_context().get_trial_dir())
+            calibration=False, logdir=Path(train.get_context().get_trial_dir())
         )
 
     metrics.update({f"test_{k}": v for k, v in test_metrics.items()})

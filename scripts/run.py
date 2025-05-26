@@ -175,7 +175,7 @@ def main(args: Args):
             elif "ttm" in args.model_name:
                 # Load model
                 model = load_ttm_model(
-                    model_name=args.model_name, # ibm-granite/granite-timeseries-ttm-r2
+                    model_name=args.model_name,  # ibm-granite/granite-timeseries-ttm-r2
                     forecast_horizon=args.forecast_horizon,
                     context_length=args.context_length,
                 ).to(torch.device(args.device))

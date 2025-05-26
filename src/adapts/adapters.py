@@ -286,6 +286,7 @@ class MultichannelProjector:
         """
         Apply the base_projector_ inverse transform on the input data.
         """
+
         X_transposed = np.swapaxes(X, 1, 2)
 
         num_samples, seq_len, num_channels = X_transposed.shape
