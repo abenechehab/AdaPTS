@@ -17,9 +17,7 @@ from ray.tune.search.hebo import HEBOSearch
 
 from adapts import adapters
 from adapts.adapts import ADAPTS
-from adapts.icl.moment import MomentICLTrainer
-from adapts.icl.moirai import MoiraiICLTrainer
-from adapts.icl.ttm import TTMICLTrainer
+
 from adapts.adapters import (
     SimpleAutoEncoder,
     LinearAutoEncoder,
@@ -34,9 +32,6 @@ from adapts.adapters import (
     linearLikelihoodVAE,
 )
 from adapts.utils.main_script import (
-    load_moment_model,
-    load_moirai_model,
-    load_ttm_model,
     prepare_data,
     save_hyperopt_metrics_to_csv,
 )
@@ -54,7 +49,14 @@ ADAPTER_CLS = {
     "lVAE": likelihoodVAE,
     "linearlVAE": linearLikelihoodVAE,
 }
-NOT_FULL_COMP_ADAPTERS = ["lVAE"]
+NOT_FULL_COMP_ADAPTERS = [
+    "lVAE",
+    "VAE",
+    "linearAE",
+    "linearVAE",
+    "dropoutLinearAE",
+    "linearlVAE",
+]
 MAX_TRAIN_SIZE = 500
 
 
@@ -77,7 +79,7 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
     """Define search space for each adapter type"""
     base_space = {
         "learning_rate": tune.choice([1e-3]),
-        "batch_size": tune.choice([32]),
+        "batch_size": tune.choice([256]),
         "use_revin": tune.choice([True]),
     }
 
@@ -92,7 +94,7 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
     if "VAE" in adapter_type:
         base_space.update(
             {
-                "beta": tune.choice([0.5, 1, 2, 4]),
+                "beta": tune.choice([0.0, 0.1, 0.5, 1, 2, 4]),
             }
         )
     if adapter_type in ["flow", "AEflow"]:
@@ -111,7 +113,7 @@ def get_search_space(adapter_type: str) -> Dict[str, Any]:
     if "lVAE" in adapter_type:
         base_space.update(
             {
-                "fixed_logvar": tune.choice([0.5, 1.0, 1.5, 2.0, 3.0, None]),
+                "fixed_logvar": tune.choice([0.5, 1.0, 1.5, 2.0, 3.0]),
                 # "fixed_logvar": tune.choice([None]),
             }
         )
@@ -216,14 +218,20 @@ def train_adapter(
 
     # model
     if "MOMENT" in model_name:
+        from adapts.icl.moment import MomentICLTrainer, load_moment_model
+
         model = load_moment_model(model_name, forecasting_horizon).to(device)
         icl_constructor = MomentICLTrainer
     elif "moirai" in model_name:
+        from adapts.icl.moirai import MoiraiICLTrainer, load_moirai_model
+
         model = load_moirai_model(model_name, forecasting_horizon, context_length).to(
             device
         )
         icl_constructor = MoiraiICLTrainer
     elif "ttm" in model_name:
+        from adapts.icl.ttm import TTMICLTrainer, load_ttm_model
+
         # Load model
         model = load_ttm_model(
             model_name=model_name,  # ibm-granite/granite-timeseries-ttm-r2
@@ -231,6 +239,42 @@ def train_adapter(
             context_length=context_length,
         ).to(device)
         icl_constructor = TTMICLTrainer
+    elif "timesfm" in args.model_name:
+        from adapts.icl.timesfm import TimesFMICLTrainer, load_timesfm_model
+
+        # Load model
+        model = load_timesfm_model(
+            model_name=model_name,  # google/timesfm-2.0-500m-pytorch
+            forecast_horizon=forecasting_horizon,
+            context_length=context_length,
+        )
+        model._model.to(torch.device(device))
+
+        icl_constructor = TimesFMICLTrainer
+    elif "chronos" in args.model_name:
+        from adapts.icl.chronos import ChronosICLTrainer, load_chronos_model
+
+        # Load model
+        model = load_chronos_model(
+            model_name=args.model_name,  # amazon/chronos-bolt-small
+            # forecast_horizon=args.forecast_horizon,
+            # context_length=args.context_length,
+        )
+        model.inner_model.to(torch.device(args.device))
+
+        icl_constructor = ChronosICLTrainer
+    elif "TiRex" in args.model_name:
+        from adapts.icl.tirex import TirexICLTrainer, load_tirex_model
+
+        # Load model
+        model = load_tirex_model(
+            model_name=args.model_name,  # NX-AI/TiRex
+            # forecast_horizon=args.forecast_horizon,
+            # context_length=args.context_length,
+        )
+        model.to(torch.device(args.device))
+
+        icl_constructor = TirexICLTrainer
     else:
         raise ValueError(f"Not supported model: {args.model_name}")
     start_time = time.time()
@@ -288,10 +332,8 @@ def train_adapter(
             n_components=n_components,
         )
 
-        if "ttm" in model_name:
-            pass
-        else:
-            # Train on this fold
+        if "MOMENT" in model_name:
+            # Train linear head on this fold
             adapts_model.fine_tune_iclearner(
                 X=X_train,
                 y=y_train,
@@ -350,7 +392,8 @@ def train_adapter(
         context_length=context_length,
         forecasting_horizon=forecasting_horizon,
         config=config,
-        data_path=Path("results/hyperopt.csv"),
+        # TODO: handle this as parameter to avoid absolute path
+        data_path=Path("/mnt/data_2/abenechehab/AdaPTS/results/hyperopt.csv"),
         elapsed_time=time.time() - start_time,
         seed=seed,
     )
