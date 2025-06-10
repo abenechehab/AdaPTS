@@ -137,6 +137,8 @@ The hyperparameter search uses **Ray-Tune** with the **HEBO** engine.
 |-----------------|---------------------|---------------|--------|-------|------|-------------|
 | MOMENT | ❌ | ❌ | small, medium, large | [Paper](https://arxiv.org/abs/2402.03885) | [GitHub](https://github.com/moment-timeseries-foundation-model/moment) | [AutonLab/MOMENT](https://huggingface.co/AutonLab/MOMENT-1-large) |
 | MOIRAI | ⚠️ (flatten+attention bias) | ✅ | small, medium, large | [Paper](https://arxiv.org/abs/2402.02592) | [GitHub](https://github.com/SalesforceAIResearch/uni2ts) | [Salesforce/moirai](https://huggingface.co/collections/Salesforce/moirai-r-models-65c8d3a94c51428c300e0742) |
+| TTM | ❌ | ❌ (channel mix for few-shot) | R1, R2 | [Paper](https://arxiv.org/pdf/2401.03955) | [GitHub](hhttps://github.com/ibm-granite/granite-tsfm/tree/main/tsfm_public/models/tinytimemixer) | [ibm-granite/granite-timeseries-ttm-r2](https://huggingface.co/ibm-granite/granite-timeseries-ttm-r2) |
+| TimesFM | ❌ | ❌ | 200M, 500M | [Paper](https://arxiv.org/pdf/2310.10688) | [GitHub](https://github.com/google-research/timesfm) | [google/timesfm-2.0-500m-pytorch](https://huggingface.co/google/timesfm-2.0-500m-pytorch) |
 
 ## ⚖️ License
 
