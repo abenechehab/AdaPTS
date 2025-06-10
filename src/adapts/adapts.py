@@ -477,7 +477,7 @@ class ADAPTS:
             val_dataset, batch_size=batch_size, shuffle=False
         )
 
-        self.iclearner.model.eval()
+        self.iclearner.eval()
 
         def make_predictions(X_batch, y_batch):
             X_batch_transformed = self.adapter.transform_torch(X_batch)
@@ -510,7 +510,7 @@ class ADAPTS:
         )
         # Initialize learning rate scheduler
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-6
+            optimizer, mode="min", factor=0.75, patience=5, min_lr=1e-6
         )
 
         for epoch in tqdm(
