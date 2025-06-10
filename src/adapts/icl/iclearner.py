@@ -41,3 +41,7 @@ class ICLTrainer(ABC):
     @abstractmethod
     def predict_long_horizon(self, prediction_horizon: int, **kwargs):
         """Long horizon autoregressive predictions using the model."""
+
+    @abstractmethod
+    def eval(self):
+        """Set the model to evaluation mode."""
