@@ -11,73 +11,8 @@ import pandas as pd
 # adapts
 from adapts.utils import data_readers
 
-# Moment
-from momentfm import MOMENTPipeline
-
-# Moirai
-from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
-
-# TTM
-from tsfm_public.models.tinytimemixer import TinyTimeMixerForPrediction
-from tsfm_public.toolkit.get_model import get_model
-
 
 RL_DATASETS = ["HalfCheetah_expert"]
-
-
-def load_moment_model(model_name: str, forecast_horizon: int) -> MOMENTPipeline:
-    model = MOMENTPipeline.from_pretrained(
-        model_name,
-        model_kwargs={
-            "task_name": "forecasting",
-            "forecast_horizon": forecast_horizon,
-            "head_dropout": 0.1,
-            "weight_decay": 0,
-            "freeze_encoder": True,
-            "freeze_embedder": True,
-            "freeze_head": False,
-        },
-        local_files_only=True,
-    )
-    model.init()
-    return model
-
-
-def load_moirai_model(
-    model_name: str,
-    forecast_horizon: int,
-    context_length: int,
-) -> MoiraiForecast:
-    model = MoiraiForecast(
-        module=MoiraiModule.from_pretrained(
-            model_name,
-        ),
-        prediction_length=forecast_horizon,
-        context_length=context_length,
-        patch_size=32,
-        num_samples=100,
-        target_dim=1,
-        feat_dynamic_real_dim=0,
-        past_feat_dynamic_real_dim=0,
-    )
-    return model
-
-
-def load_ttm_model(
-    model_name: str,
-    forecast_horizon: int,
-    context_length: int,
-) -> TinyTimeMixerForPrediction:
-    zeroshot_model = get_model(
-        model_name,
-        context_length=context_length,
-        prediction_length=forecast_horizon,
-        freq_prefix_tuning=False,
-        freq=None,
-        prefer_l1_loss=False,
-        prefer_longer_context=True,
-    )
-    return zeroshot_model
 
 
 def prepare_data(dataset_name: str, context_length: int, forecasting_horizon: int):
