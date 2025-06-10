@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional, List
+from typing import Optional, List
 
 import copy
 from tqdm import tqdm
@@ -10,10 +10,27 @@ from torch.optim.lr_scheduler import OneCycleLR
 
 from momentfm.utils.utils import control_randomness
 
-if TYPE_CHECKING:
-    from momentfm import MOMENTPipeline
+from momentfm import MOMENTPipeline
 
 from adapts.icl.iclearner import ICLTrainer, ICLObject
+
+
+def load_moment_model(model_name: str, forecast_horizon: int) -> MOMENTPipeline:
+    model = MOMENTPipeline.from_pretrained(
+        model_name,
+        model_kwargs={
+            "task_name": "forecasting",
+            "forecast_horizon": forecast_horizon,
+            "head_dropout": 0.1,
+            "weight_decay": 0,
+            "freeze_encoder": True,
+            "freeze_embedder": True,
+            "freeze_head": False,
+        },
+        local_files_only=True,
+    )
+    model.init()
+    return model
 
 
 class MomentICLTrainer(ICLTrainer):
@@ -291,3 +308,7 @@ class MomentICLTrainer(ICLTrainer):
             print(f"Restoring weights from epoch {best_epoch}")
         self.model.load_state_dict(best_model_weights)
         del best_model_weights
+
+    def eval(self):
+        self.model.eval()
+        return self.model
