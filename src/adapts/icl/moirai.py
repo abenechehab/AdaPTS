@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional, List
+from typing import Optional, List
 
 from tqdm import tqdm
 
@@ -6,10 +6,30 @@ import numpy as np
 from numpy.typing import NDArray
 import torch
 
-if TYPE_CHECKING:
-    from uni2ts.model.moirai import MoiraiForecast
+
+from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 
 from adapts.icl.iclearner import ICLTrainer, ICLObject
+
+
+def load_moirai_model(
+    model_name: str,
+    forecast_horizon: int,
+    context_length: int,
+) -> MoiraiForecast:
+    model = MoiraiForecast(
+        module=MoiraiModule.from_pretrained(
+            model_name,
+        ),
+        prediction_length=forecast_horizon,
+        context_length=context_length,
+        patch_size=32,
+        num_samples=100,
+        target_dim=1,
+        feat_dynamic_real_dim=0,
+        past_feat_dynamic_real_dim=0,
+    )
+    return model
 
 
 class MoiraiICLTrainer(ICLTrainer):
@@ -79,7 +99,7 @@ class MoiraiICLTrainer(ICLTrainer):
         self,
         prediction_horizon: int,
         batch_size: int = 1024,
-        native_multivariate: bool = True,
+        native_multivariate: bool = False,
         verbose: int = 1,
     ):
         """Multi-step prediction using Moirai model"""
@@ -150,3 +170,7 @@ class MoiraiICLTrainer(ICLTrainer):
                 predictions = torch.concat(all_predictions, axis=0)
                 self.icl_object[dim].predictions = predictions
         return self.compute_statistics()
+
+    def eval(self):
+        self.model.eval()
+        return self.model
