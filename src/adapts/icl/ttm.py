@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional, List
+from typing import Optional, List
 
 import numpy as np
 from numpy.typing import NDArray
@@ -6,8 +6,25 @@ import torch
 
 from adapts.icl.iclearner import ICLTrainer, ICLObject
 
-if TYPE_CHECKING:
-    from tsfm_public.models.tinytimemixer import TinyTimeMixerForPrediction
+from tsfm_public.models.tinytimemixer import TinyTimeMixerForPrediction
+from tsfm_public.toolkit.get_model import get_model
+
+
+def load_ttm_model(
+    model_name: str,
+    forecast_horizon: int,
+    context_length: int,
+) -> TinyTimeMixerForPrediction:
+    zeroshot_model = get_model(
+        model_name,
+        context_length=context_length,
+        prediction_length=max(forecast_horizon, 96),
+        freq_prefix_tuning=False,
+        freq=None,
+        prefer_l1_loss=False,
+        prefer_longer_context=True,
+    )
+    return zeroshot_model
 
 
 class TTMICLTrainer(ICLTrainer):
@@ -83,6 +100,9 @@ class TTMICLTrainer(ICLTrainer):
             predictions = self.model(tensor_ts)
             predictions = predictions.prediction_outputs.swapaxes(1, 2)
 
+            # trim predictions to the forecast horizon
+            predictions = predictions[:, :, : self.forecast_horizon]
+
             self.icl_object[dim].predictions = predictions
 
         return self.compute_statistics()
@@ -98,3 +118,7 @@ class TTMICLTrainer(ICLTrainer):
             self.icl_object[dim].mode_arr = mean_preds
             self.icl_object[dim].sigma_arr = np.zeros_like(mean_preds)
         return self.icl_object
+
+    def eval(self):
+        self.model.eval()
+        return self.model
