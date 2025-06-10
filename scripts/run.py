@@ -14,16 +14,10 @@ import torch
 
 # adapts
 from adapts import adapts, adapters
-from adapts.icl.moment import MomentICLTrainer
-from adapts.icl.moirai import MoiraiICLTrainer
-from adapts.icl.ttm import TTMICLTrainer
 from adapts.utils.main_script import (
     save_metrics_to_csv,
     setup_logging,
     prepare_data,
-    load_moment_model,
-    load_moirai_model,
-    load_ttm_model,
 )
 from adapts.utils.preprocessing import get_gpu_memory_stats
 from adapts.adapters import (
@@ -58,7 +52,7 @@ ADAPTER_CLS = {
 }
 NOT_FULL_COMP_ADAPTERS = []
 MAX_TRAIN_SIZE = 10000
-CUSTOM_N_COMP = [2, 5, 9, 14]
+CUSTOM_N_COMP = [2, 3, 5, 7, 9, 14]
 
 
 @dataclass
@@ -82,7 +76,7 @@ class Args:
     pca_in_preprocessing: bool = False
     custom_n_comp: bool = False
     n_epochs_fine_tuning: int = 50
-    n_epochs_adapter: int = 100
+    n_epochs_adapter: int = 300
 
 
 def main(args: Args):
@@ -163,16 +157,22 @@ def main(args: Args):
                 f"{args.model_name}"
             )
             if "MOMENT" in args.model_name:
+                from adapts.icl.moment import MomentICLTrainer, load_moment_model
+
                 model = load_moment_model(args.model_name, args.forecast_horizon).to(
                     torch.device(args.device)
                 )
                 icl_constructor = MomentICLTrainer
             elif "moirai" in args.model_name:
+                from adapts.icl.moirai import MoiraiICLTrainer, load_moirai_model
+
                 model = load_moirai_model(
                     args.model_name, args.forecast_horizon, args.context_length
                 ).to(torch.device(args.device))
                 icl_constructor = MoiraiICLTrainer
             elif "ttm" in args.model_name:
+                from adapts.icl.ttm import TTMICLTrainer, load_ttm_model
+
                 # Load model
                 model = load_ttm_model(
                     model_name=args.model_name,  # ibm-granite/granite-timeseries-ttm-r2
@@ -180,6 +180,42 @@ def main(args: Args):
                     context_length=args.context_length,
                 ).to(torch.device(args.device))
                 icl_constructor = TTMICLTrainer
+            elif "timesfm" in args.model_name:
+                from adapts.icl.timesfm import TimesFMICLTrainer, load_timesfm_model
+
+                # Load model
+                model = load_timesfm_model(
+                    model_name=args.model_name,  # google/timesfm-2.0-500m-pytorch
+                    forecast_horizon=args.forecast_horizon,
+                    context_length=args.context_length,
+                )
+                model._model.to(torch.device(args.device))
+
+                icl_constructor = TimesFMICLTrainer
+            elif "chronos" in args.model_name:
+                from adapts.icl.chronos import ChronosICLTrainer, load_chronos_model
+
+                # Load model
+                model = load_chronos_model(
+                    model_name=args.model_name,  # amazon/chronos-bolt-small
+                    # forecast_horizon=args.forecast_horizon,
+                    # context_length=args.context_length,
+                )
+                model.inner_model.to(torch.device(args.device))
+
+                icl_constructor = ChronosICLTrainer
+            elif "TiRex" in args.model_name:
+                from adapts.icl.tirex import TirexICLTrainer, load_tirex_model
+
+                # Load model
+                model = load_tirex_model(
+                    model_name=args.model_name,  # NX-AI/TiRex
+                    # forecast_horizon=args.forecast_horizon,
+                    # context_length=args.context_length,
+                )
+                model.to(torch.device(args.device))
+
+                icl_constructor = TirexICLTrainer
             else:
                 raise ValueError(f"Not supported model: {args.model_name}")
             logger.info(
@@ -188,8 +224,9 @@ def main(args: Args):
             )
 
         config_file_path = Path(
-            f"results/config/{args.dataset_name}_{args.adapter}.json"
+            f"results/config/{args.model_name.split('/')[-1]}_{args.dataset_name}_{args.forecast_horizon}_{args.adapter}.json"
         )
+
         if args.adapter and (args.adapter in ADAPTER_CLS) and config_file_path.exists():
             with open(config_file_path, "r") as f:
                 adapter_config = json.load(f)
@@ -228,6 +265,12 @@ def main(args: Args):
                         "beta": adapter_config["beta"],
                     }
                 )
+            if "lVAE" in args.adapter:
+                adapter_params.update(
+                    {
+                        "fixed_logvar": adapter_config["fixed_logvar"],
+                    }
+                )
             if "dropout" in args.adapter or args.adapter == "AEflow":
                 adapter_params.update(
                     {
@@ -238,6 +281,9 @@ def main(args: Args):
             adapter = ADAPTER_CLS[args.adapter](**adapter_params).to(args.device)
             learning_rate = adapter_config["learning_rate"]
             batch_size = adapter_config["batch_size"]
+
+            logger.info(f"adapter config loaded from file: {config_file_path}")
+            logger.info(f"adapter config: {adapter_config}")
         else:
             if not args.adapter and args.use_revin:
                 adapter = JustRevIn(
